@@ -1,0 +1,49 @@
+{
+  "defaultAgent": "iflow",
+  "workingDirectory": "~/projects",
+  "agents": {
+    "iflow": {
+      "type": "cli",
+      "command": "iflow",
+      "args": ["--print"],
+      "timeout": 300000,
+      "sessionResume": true
+    },
+    "claude": {
+      "type": "cli",
+      "command": "claude",
+      "args": ["-p", "--dangerously-skip-permissions"],
+      "timeout": 300000,
+      "sessionResume": true
+    },
+    "codex": {
+      "type": "cli",
+      "command": "codex",
+      "args": ["exec"],
+      "timeout": 300000,
+      "sessionResume": true
+    },
+    "gemini": {
+      "type": "cli",
+      "command": "gemini",
+      "args": ["-p"],
+      "timeout": 300000,
+      "sessionResume": true
+    },
+    "openclaw": {
+      "type": "http",
+      "endpoint": "http://localhost:8080",
+      "apiKey": "",
+      "model": "main",
+      "timeout": 300000
+    }
+  },
+  "context": {
+    "maxHistory": 50,
+    "summarizeThreshold": 20000
+  },
+  "permission": {
+    "mode": "auto",
+    "timeout": 120
+  }
+}
