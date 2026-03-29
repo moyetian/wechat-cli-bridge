@@ -6,6 +6,17 @@
 
 export type AgentType = 'cli' | 'sdk' | 'http';
 
+export type CLIInvocationMode = 'positional' | 'prompt_flag';
+
+export interface CLIPermissionProfile {
+  /** How prompts are passed to the CLI */
+  invocationMode?: CLIInvocationMode;
+  /** Prompt/headless mode arguments managed by the bridge */
+  promptArgs?: string[];
+  /** Permission-mode-specific arguments managed by the bridge */
+  permissionArgs?: Partial<Record<PermissionMode, string[]>>;
+}
+
 export interface AgentConfig {
   /** Agent type: cli, sdk, or http */
   type: AgentType;
@@ -27,6 +38,8 @@ export interface AgentConfig {
   endpoint?: string;
   /** API key (for HTTP type) */
   apiKey?: string;
+  /** CLI permission profile managed by the bridge */
+  permissionProfile?: CLIPermissionProfile;
 }
 
 export interface ExecuteOptions {
@@ -38,6 +51,10 @@ export interface ExecuteOptions {
   sessionId?: string;
   /** Project information */
   projectInfo?: ProjectInfo;
+  /** Current permission mode */
+  permissionMode?: PermissionMode;
+  /** Whether the task has already been approved by the bridge */
+  bridgeApproved?: boolean;
 }
 
 export interface ExecuteResult {
@@ -60,14 +77,84 @@ export interface ExecuteResult {
 }
 
 export interface PermissionRequest {
+  /** Optional request ID before persistence */
+  id?: string;
   /** Tool name */
   tool: string;
   /** Action description */
   action: string;
+  /** Action category */
+  category?: PermissionActionCategory;
   /** File path if applicable */
   file?: string;
+  /** Extra details shown to users */
+  details?: string;
   /** Timeout in seconds */
   timeout: number;
+}
+
+export type PermissionActionCategory =
+  | 'read'
+  | 'edit'
+  | 'execute'
+  | 'network'
+  | 'destructive'
+  | 'other';
+
+export type PermissionDecision = 'pending' | 'approved' | 'denied' | 'expired';
+
+export interface ApprovalRequest {
+  /** Approval request ID */
+  id: string;
+  /** Tool requesting approval */
+  tool: string;
+  /** Human-readable action summary */
+  action: string;
+  /** Action category for future policy enforcement */
+  category: PermissionActionCategory;
+  /** Optional file target */
+  file?: string;
+  /** Optional details */
+  details?: string;
+  /** Approval timeout in seconds */
+  timeout: number;
+  /** Current decision status */
+  status: PermissionDecision;
+  /** Creation timestamp */
+  requestedAt: Date;
+  /** Expiration timestamp */
+  expiresAt: Date;
+  /** Response timestamp */
+  respondedAt?: Date;
+}
+
+export type PendingTaskStatus =
+  | 'awaiting_approval'
+  | 'approved'
+  | 'denied'
+  | 'expired'
+  | 'running'
+  | 'completed';
+
+export interface PendingTaskExecution {
+  /** Pending execution ID */
+  id: string;
+  /** Linked approval request ID */
+  requestId: string;
+  /** Original task text */
+  task: string;
+  /** Agent selected for execution */
+  agentName: string;
+  /** Working directory captured at request time */
+  workingDir: string;
+  /** Classified permission category */
+  category: PermissionActionCategory;
+  /** Current pending execution status */
+  status: PendingTaskStatus;
+  /** Creation timestamp */
+  createdAt: Date;
+  /** Last update timestamp */
+  updatedAt: Date;
 }
 
 // ============================================================================
@@ -108,6 +195,10 @@ export interface ContextState {
   blockers: string[];
   /** Last modified files */
   recentFiles: string[];
+  /** Approval requests tracked in session state */
+  approvalRequests: ApprovalRequest[];
+  /** Pending task executions waiting on approval or resumption */
+  pendingExecutions: PendingTaskExecution[];
 }
 
 export interface TaskRecord {
@@ -217,6 +308,27 @@ export interface BridgeConfig {
   permission: {
     mode: PermissionMode;
     timeout: number;
+  };
+  /** Media delivery settings */
+  media: {
+    maxImageSizeMB: number;
+    maxFileSizeMB: number;
+  };
+  /** Mail delivery settings */
+  mail: {
+    enabled: boolean;
+    provider: 'smtp';
+    from?: string;
+    replyTo?: string;
+    defaultTo: string[];
+    maxAttachmentSizeMB: number;
+    smtp: {
+      host: string;
+      port: number;
+      secure: boolean;
+      user: string;
+      pass: string;
+    };
   };
   /** iLink settings */
   ilink: {

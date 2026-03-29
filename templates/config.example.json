@@ -45,5 +45,24 @@
   "permission": {
     "mode": "auto",
     "timeout": 120
+  },
+  "media": {
+    "maxImageSizeMB": 10,
+    "maxFileSizeMB": 25
+  },
+  "mail": {
+    "enabled": false,
+    "provider": "smtp",
+    "from": "bot@example.com",
+    "replyTo": "bot@example.com",
+    "defaultTo": ["you@example.com"],
+    "maxAttachmentSizeMB": 25,
+    "smtp": {
+      "host": "smtp.example.com",
+      "port": 465,
+      "secure": true,
+      "user": "bot@example.com",
+      "pass": "app-password"
+    }
   }
 }

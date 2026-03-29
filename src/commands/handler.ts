@@ -1,5 +1,14 @@
-import { ParsedCommand, PermissionMode } from '../types';
+import { ParsedCommand } from '../types';
 import { resolveAgentName } from '../agents';
+import {
+  getPermissionModeDescription,
+  isValidPermissionMode,
+  PERMISSION_MODES,
+} from '../permissions/contract';
+import {
+  MAX_WECHAT_FILE_SIZE_BYTES,
+  MAX_WECHAT_IMAGE_SIZE_BYTES,
+} from '../media/staging';
 import logger from '../utils/logger';
 
 /**
@@ -9,6 +18,11 @@ export interface CommandInfo {
   description: string;
   requiresArg: boolean;
   argHint?: string;
+}
+
+export interface HelpTextOptions {
+  maxImageSizeMB?: number;
+  maxFileSizeMB?: number;
 }
 
 /**
@@ -35,12 +49,35 @@ export const COMMANDS: Record<string, CommandInfo> = {
   // Directory management
   cd: { description: '切换工作目录', requiresArg: true, argHint: '<path>' },
   pwd: { description: '查看当前工作目录', requiresArg: false },
+  sendfile: { description: '以文件附件发送本地文件', requiresArg: true, argHint: '<path>' },
+  sendimage: { description: '发送本地图片到当前微信会话', requiresArg: true, argHint: '<path>' },
+  mail: { description: '发送纯文本邮件', requiresArg: true, argHint: '<to> | <subject> | <body>' },
+  mailhtml: { description: '发送 HTML 邮件', requiresArg: true, argHint: '<to> | <subject> | <html>' },
+  mailfile: {
+    description: '发送带附件邮件',
+    requiresArg: true,
+    argHint: '<to> | <subject> | <path> | [body]',
+  },
   
   // Permission control
   permission: { 
     description: '切换权限模式', 
     requiresArg: true, 
     argHint: '<interactive|acceptEdits|auto|plan>' 
+  },
+  pending: {
+    description: '查看待审批请求',
+    requiresArg: false,
+  },
+  approve: {
+    description: '批准待审批请求',
+    requiresArg: false,
+    argHint: '[requestId]',
+  },
+  deny: {
+    description: '拒绝待审批请求',
+    requiresArg: false,
+    argHint: '[requestId]',
   },
   
   // Help
@@ -83,7 +120,7 @@ export function parseMessage(text: string): ParsedCommand {
  * Parse command from text
  */
 function parseCommand(text: string): ParsedCommand {
-  const parts = text.substring(1).split(/\s+/);
+  const parts = tokenizeCommand(text.substring(1).trim());
   const cmd = parts[0]?.toLowerCase();
   const args = parts.slice(1);
 
@@ -122,30 +159,78 @@ function parseCommand(text: string): ParsedCommand {
   };
 }
 
-/**
- * Validate permission mode
- */
-export function isValidPermissionMode(mode: string): mode is PermissionMode {
-  return ['interactive', 'acceptEdits', 'auto', 'plan'].includes(mode);
+function tokenizeCommand(text: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | '\'' | null = null;
+
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+        continue;
+      }
+
+      if (char === '\\' && text[index + 1] === quote) {
+        current += quote;
+        index++;
+        continue;
+      }
+
+      current += char;
+      continue;
+    }
+
+    if (char === '"' || char === '\'') {
+      quote = char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current) {
+    tokens.push(current);
+  }
+
+  return tokens;
 }
 
-/**
- * Get permission mode description
- */
-export function getPermissionModeDescription(mode: PermissionMode): string {
-  const descriptions: Record<PermissionMode, string> = {
-    interactive: '每次工具调用需手动批准',
-    acceptEdits: '自动批准文件编辑，其他需批准',
-    auto: '自动批准所有操作（危险）',
-    plan: '只读模式，不允许任何工具调用',
-  };
-  return descriptions[mode];
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 /**
  * Generate help text
  */
-export function generateHelpText(): string {
+export function generateHelpText(options: HelpTextOptions = {}): string {
+  const maxImageSizeBytes =
+    (options.maxImageSizeMB || MAX_WECHAT_IMAGE_SIZE_BYTES / (1024 * 1024)) * 1024 * 1024;
+  const maxFileSizeBytes =
+    (options.maxFileSizeMB || MAX_WECHAT_FILE_SIZE_BYTES / (1024 * 1024)) * 1024 * 1024;
   const lines: string[] = [
     '# WeChat CLI Bridge 帮助',
     '',
@@ -162,7 +247,28 @@ export function generateHelpText(): string {
   ];
 
   for (const [cmd, info] of Object.entries(COMMANDS)) {
-    if (['status', 'clear', 'history', 'context', 'cancel', 'stop', 'cd', 'pwd', 'permission', 'help', 'workdir', 'agent'].includes(cmd)) {
+    if ([
+      'status',
+      'clear',
+      'history',
+      'context',
+      'cancel',
+      'stop',
+      'cd',
+      'pwd',
+      'sendfile',
+      'sendimage',
+      'mail',
+      'mailhtml',
+      'mailfile',
+      'permission',
+      'pending',
+      'approve',
+      'deny',
+      'help',
+      'workdir',
+      'agent',
+    ].includes(cmd)) {
       const argHint = info.argHint ? ` ${info.argHint}` : '';
       lines.push(`/${cmd}${argHint} - ${info.description}`);
     }
@@ -170,13 +276,26 @@ export function generateHelpText(): string {
 
   lines.push('');
   lines.push('## 权限模式');
-  lines.push('- interactive: 每次工具调用需手动批准');
-  lines.push('- acceptEdits: 自动批准文件编辑');
-  lines.push('- auto: 自动批准所有操作（危险）');
-  lines.push('- plan: 只读模式');
+  for (const mode of PERMISSION_MODES) {
+    lines.push(`- ${mode}: ${getPermissionModeDescription(mode)}`);
+  }
   lines.push('');
-  lines.push('⚠️ 注意: 当前版本权限管控功能正在开发中，默认相当于 auto 模式');
-  lines.push('请在安全的沙箱环境下运行！');
+  lines.push('## 媒体发送');
+  lines.push('- 路径含空格时请用引号包起来，例如 `/sendfile "./build/My Report.pdf"`');
+  lines.push('- 也支持自然语言，例如 `把桌面上的 report.pdf 发给我`');
+  lines.push(`- 图片当前限制: ${formatBytes(maxImageSizeBytes)}`);
+  lines.push(`- 文件当前限制: ${formatBytes(maxFileSizeBytes)}`);
+  lines.push('- 会阻止 `.ssh`、`.git`、`.env` 等敏感路径');
+  lines.push('');
+  lines.push('## 邮件发送');
+  lines.push('- `/mail to@example.com | Subject | Body`');
+  lines.push('- `/mailhtml to@example.com | Subject | <p>HTML</p>`');
+  lines.push('- `/mailfile to@example.com | Subject | ./report.pdf | Body`');
+  lines.push('');
+  lines.push('## 审批命令');
+  lines.push('- /pending: 查看当前待审批请求');
+  lines.push('- /approve [requestId]: 批准一个待审批请求');
+  lines.push('- /deny [requestId]: 拒绝一个待审批请求');
 
   return lines.join('\n');
 }
@@ -188,3 +307,5 @@ export default {
   getPermissionModeDescription,
   generateHelpText,
 };
+
+export { isValidPermissionMode, getPermissionModeDescription };

@@ -84,26 +84,59 @@ export function getDefaultAgents(): Record<string, AgentConfig> {
     iflow: {
       type: 'cli',
       command: 'iflow',
-      args: ['-y'], // --yolo: 自动接受所有操作
       timeout: 600000, // 10 minutes
+      permissionProfile: {
+        invocationMode: 'positional',
+        promptArgs: ['-p'],
+        permissionArgs: {
+          auto: ['-y'],
+        },
+      },
     },
     claude: {
       type: 'cli',
       command: 'claude',
-      args: ['-p', '--dangerously-skip-permissions'],
       timeout: 600000,
+      permissionProfile: {
+        invocationMode: 'prompt_flag',
+        promptArgs: ['-p'],
+        permissionArgs: {
+          interactive: ['--permission-mode', 'default'],
+          acceptEdits: ['--permission-mode', 'acceptEdits'],
+          auto: ['--dangerously-skip-permissions'],
+          plan: ['--permission-mode', 'plan'],
+        },
+      },
     },
     codex: {
       type: 'cli',
       command: 'codex',
-      args: ['-p', '--dangerously-bypass-all'], // 跳过所有权限确认
       timeout: 600000,
+      permissionProfile: {
+        invocationMode: 'prompt_flag',
+        promptArgs: ['-p'],
+        permissionArgs: {
+          interactive: ['--suggest'],
+          acceptEdits: ['--auto-edit'],
+          auto: ['--full-auto'],
+          plan: ['--suggest'],
+        },
+      },
     },
     gemini: {
       type: 'cli',
       command: 'gemini',
-      args: ['-y'], // --yolo: 自动接受所有操作
       timeout: 600000,
+      permissionProfile: {
+        invocationMode: 'prompt_flag',
+        promptArgs: ['-p'],
+        permissionArgs: {
+          interactive: ['--approval-mode', 'default'],
+          acceptEdits: ['--approval-mode', 'auto_edit'],
+          auto: ['--approval-mode', 'yolo'],
+          plan: ['--approval-mode', 'default'],
+        },
+      },
     },
     openclaw: {
       type: 'http',

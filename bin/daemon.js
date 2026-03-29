@@ -5,7 +5,23 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-const BRIDGE_DIR = path.join(os.homedir(), '.wechat-cli-bridge');
+const BRIDGE_HOME_ENV = 'WECHAT_CLI_BRIDGE_HOME';
+
+function resolveBridgeHome() {
+  const configured = process.env[BRIDGE_HOME_ENV] || path.join(os.homedir(), '.wechat-cli-bridge');
+
+  if (configured === '~') {
+    return os.homedir();
+  }
+
+  if (configured.startsWith(`~${path.sep}`)) {
+    return path.join(os.homedir(), configured.slice(2));
+  }
+
+  return path.resolve(configured);
+}
+
+const BRIDGE_DIR = resolveBridgeHome();
 const PID_FILE = path.join(BRIDGE_DIR, 'bridge.pid');
 const LOG_FILE = path.join(BRIDGE_DIR, 'logs', 'daemon.log');
 
@@ -37,6 +53,7 @@ function start() {
 
   console.log('Starting Bridge daemon...');
 
+  fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
   const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
   
   const child = fork(path.join(__dirname, '../dist/index.js'), [], {

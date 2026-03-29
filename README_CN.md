@@ -1,296 +1,127 @@
 # WeChat CLI Bridge
 
-<p align="center">
-  <strong>让微信控制 CLI Agent 干活</strong>
-</p>
+> 让微信控制 CLI Agent 干活
 
-<p align="center">
-  <a href="#功能">功能</a> •
-  <a href="#安装">安装</a> •
-  <a href="#使用">使用</a> •
-  <a href="#配置">配置</a> •
-  <a href="#架构">架构</a>
-</p>
+一个桥接工具，让你可以通过微信 ClawBot 控制 CLI Agent（iFlow、Claude Code、Codex、Gemini、OpenClaw）执行编程任务，并把结果回传到当前微信会话。
 
----
+## 当前能力
 
-## 功能
+- **多 Agent 支持**: iFlow CLI、Claude Code、Codex、Gemini CLI、OpenClaw
+- **权限模式**: `interactive` / `acceptEdits` / `auto` / `plan`
+- **审批流**: 待审批请求、批准恢复、拒绝和超时失效
+- **富媒体下发**: 支持 `/sendimage`、`/sendfile` 从本机发送图片和文件到当前微信会话
+- **邮件发送**: 支持 `/mail`、`/mailhtml`、`/mailfile` 走 SMTP 发送正文和附件
+- **二维码登录**: 微信扫码即可认证
+- **上下文管理**: GSD 风格的状态追踪
+- **跨平台**: 支持 Windows / Linux
 
-**微信发一条消息，背后的 CLI 就去读文件、改代码、跑测试，然后把结果发回微信。**
+## 当前状态
 
-- 🤖 **多 Agent 支持** - iFlow CLI、Claude Code、Codex、Gemini CLI、OpenClaw
-- 💾 **上下文管理** - GSD 风格的状态追踪，解决 context rot 问题
-- 🔄 **会话持久化** - 断开重连后继续之前的工作
-- 🛑 **任务取消** - 支持 /cancel 命令中断长时间运行的任务
-- 📁 **目录管理** - 在微信中切换工作目录
-- ✂️ **消息分片** - 自动拆分长消息以适应微信 2000 字符限制
+- `v1.2` 权限管控与执行加固已完成
+- `v1.3` rich delivery 已完成实现与真实设备 UAT
+- `v1.4` mail channel 已完成真实收件箱 UAT，当前达到 release ready
 
-> ⚠️ **权限管控功能正在开发中**：当前版本默认相当于 Auto 模式，请在安全的沙箱环境下运行！
-
-## 原理
-
-```
-微信 ClawBot
-    │
-    ▼
-iLink API (HTTP 长轮询，独立协议)
-    │
-    ▼
-Bridge Core (~200行胶水层)
-    │
-    ├── 上下文管理器 (GSD 风格)
-    │
-    └── Agent 适配器
-            │
-            ├── iFlow CLI
-            ├── Claude Code
-            ├── Codex CLI
-            └── Gemini CLI
-```
-
-**关键点**：
-1. 微信 ClawBot 的 iLink API 是独立的 HTTP 长轮询协议，不依赖 OpenClaw 框架
-2. Agent 适配器把 CLI 工具变成统一的执行接口
-3. 上下文管理器解决长对话中的 context rot 问题
-
-## 安装
-
-### 前置条件
-
-- Node.js >= 18
-- 微信版本 >= 8.0.70
-- 至少一个 CLI Agent 已安装（iFlow、Claude Code、Codex、Gemini）
-
-### 步骤
-
-**1. 克隆并安装依赖**
-
-```bash
-git clone https://github.com/moyetian/wechat-cli-bridge.git
-cd wechat-cli-bridge
-npm install
-npm run build
-```
-
-**2. 在微信中启用 ClawBot**
-
-- 打开微信 → 我 → 设置 → 插件
-- 找到「ClawBot」并启用
-- 点击进入，复制安装命令
-
-**3. 运行设置向导**
-
-```bash
-npm run setup
-# 或
-npx wechat-cli-bridge setup
-```
-
-扫描二维码登录微信 ClawBot。
-
-**4. 启动 Bridge**
-
-```bash
-npm start
-# 或后台运行
-npm run daemon start
-```
-
-## 使用
-
-### 基本对话
-
-直接发送消息，使用默认 Agent：
-
-```
-帮我修复 auth.py 的登录 bug
-```
-
-### 指定 Agent
-
-使用前缀指定 Agent：
-
-```
-/iflow 重构 user.js 的代码结构
-/claude 写一个 React 组件
-/codex 添加单元测试
-/gemini 分析这段代码的性能问题
-```
-
-### 命令
+## 常用命令
 
 | 命令 | 描述 |
 |------|------|
 | `/help` | 显示帮助 |
 | `/status` | 查看当前状态 |
-| `/clear` | 清除上下文 |
-| `/history` | 查看任务历史 |
-| `/context` | 查看上下文摘要 |
-| `/cancel` 或 `/stop` | 取消当前正在执行的任务 |
-| `/cd <path>` | 切换工作目录 |
-| `/pwd` | 查看当前目录 |
-| `/permission <mode>` | 切换权限模式（开发中） |
-| `/agent [name]` | 查看/切换 Agent |
+| `/iflow <task>` | 用 iFlow 执行任务 |
+| `/claude <task>` | 用 Claude Code 执行任务 |
+| `/codex <task>` | 用 Codex 执行任务 |
+| `/gemini <task>` | 用 Gemini 执行任务 |
+| `/sendimage <path>` | 发送本地图片到当前微信会话 |
+| `/sendfile <path>` | 将本地文件作为附件发送到当前微信会话 |
+| `/mail <to> | <subject> | <body>` | 发送纯文本邮件 |
+| `/mailhtml <to> | <subject> | <html>` | 发送 HTML 邮件 |
+| `/mailfile <to> | <subject> | <path> | [body]` | 发送带附件邮件 |
+| `/permission <mode>` | 切换权限模式 |
+| `/pending` | 查看待审批请求 |
+| `/approve [requestId]` | 批准待审批请求 |
+| `/deny [requestId]` | 拒绝待审批请求 |
 
-### 权限模式
+## 文件与图片下发
 
-> ⚠️ **注意**：权限管控功能正在开发中，当前版本默认相当于 Auto 模式
+```text
+/sendimage "./artifacts/demo.png"
+/sendfile "./build/My Report.pdf"
+```
 
-| 模式 | 描述 |
+- 路径包含空格时请使用引号。
+- `/sendimage` 仅接受受支持图片格式。
+- `/sendfile` 会按普通附件发送，即使目标本身是图片。
+- 也支持自然语言，例如 `把桌面上的 report.pdf 发给我`。
+- 如果只说“某个文件”，bridge 会先追问具体文件名。
+- 默认限制：
+  - 图片 10 MB
+  - 文件 25 MB
+- 默认会拒绝 `.ssh`、`.git`、`.env` 等敏感路径。
+
+## 当前权限行为
+
+| 模式 | 行为 |
 |------|------|
-| `interactive` | 每次工具调用需手动批准（计划中） |
-| `acceptEdits` | 自动批准文件编辑，其他需批准（计划中） |
-| `auto` | 自动批准所有操作（当前默认，危险） |
-| `plan` | 只读模式，不允许任何工具调用（计划中） |
+| `interactive` | 只读任务直接执行，其余任务先审批 |
+| `acceptEdits` | 编辑任务直接执行，执行/网络/破坏性任务先审批 |
+| `auto` | 不经 bridge 审批，直接执行 |
+| `plan` | 不启动 Agent，只返回计划 |
 
-## 配置
+审批快捷回复：
 
-配置文件位于 `~/.wechat-cli-bridge/config.json`
+- `y` / `yes` / `/approve`：批准
+- `n` / `no` / `/deny`：拒绝
+
+## 验证
+
+```bash
+npm run build
+npm run lint
+npm test -- --runInBand --ci
+```
+
+当前测试数：`120`
+
+如需修改媒体大小限制，可在 `config.json` 中调整：
+
+- `media.maxImageSizeMB`
+- `media.maxFileSizeMB`
+
+## 邮件配置
+
+如需启用 `/mail`、`/mailhtml`、`/mailfile`，在本地 `config.json` 中补全 `mail` 段：
 
 ```json
 {
-  "defaultAgent": "iflow",
-  "workingDirectory": "~/projects",
-  "agents": {
-    "iflow": {
-      "type": "cli",
-      "command": "iflow",
-      "args": ["-y"],
-      "timeout": 600000
-    },
-    "claude": {
-      "type": "cli",
-      "command": "claude",
-      "args": ["-p", "--dangerously-skip-permissions"]
-    },
-    "codex": {
-      "type": "cli",
-      "command": "codex",
-      "args": ["-p", "--dangerously-bypass-all"]
-    },
-    "gemini": {
-      "type": "cli",
-      "command": "gemini",
-      "args": ["-y"]
-    },
-    "openclaw": {
-      "type": "http",
-      "endpoint": "http://localhost:8080",
-      "apiKey": "your-api-key"
+  "mail": {
+    "enabled": true,
+    "provider": "smtp",
+    "from": "bot@example.com",
+    "replyTo": "bot@example.com",
+    "defaultTo": ["you@example.com"],
+    "maxAttachmentSizeMB": 25,
+    "smtp": {
+      "host": "smtp.example.com",
+      "port": 465,
+      "secure": true,
+      "user": "bot@example.com",
+      "pass": "app-password"
     }
-  },
-  "context": {
-    "maxHistory": 50,
-    "summarizeThreshold": 20000
-  },
-  "permission": {
-    "mode": "auto",
-    "timeout": 120
   }
 }
 ```
 
-### Agent 配置说明
-
-**CLI 类型**
-
-```json
-{
-  "type": "cli",
-  "command": "iflow",
-  "args": ["-y"],
-  "timeout": 600000
-}
-```
-
-**HTTP 类型** (OpenAI 兼容 API)
-
-```json
-{
-  "type": "http",
-  "endpoint": "http://localhost:8080",
-  "apiKey": "your-api-key",
-  "model": "main"
-}
-```
-
-## 架构
-
-### 核心模块
-
-```
-src/
-├── index.ts           # 入口
-├── setup.ts           # 设置向导
-├── bridge/
-│   ├── core.ts        # 核心胶水层 (~200行)
-│   └── ilink-client.ts # iLink API 客户端
-├── agents/
-│   ├── base.ts        # Agent 基类
-│   ├── cli-adapter.ts # CLI 适配器
-│   ├── http-adapter.ts # HTTP 适配器
-│   └── index.ts       # Agent 注册
-├── context/
-│   └── manager.ts     # 上下文管理器 (GSD 风格)
-├── commands/
-│   └── handler.ts     # 命令处理器
-└── utils/
-    ├── logger.ts      # 日志
-    └── storage.ts     # 存储
-```
-
-### 状态文件
-
-GSD 风格的状态管理：
-
-```
-~/.wechat-cli-bridge/
-├── config.json        # 全局配置
-├── accounts/          # 微信账户凭证
-├── sessions/          # 会话状态
-│   └── {user_id}/
-│       ├── session.json  # 会话元数据
-│       ├── STATE.md      # 当前状态
-│       ├── CONTEXT.md    # 上下文摘要
-│       └── HISTORY.md    # 任务历史
-└── logs/              # 日志
-```
-
-## 开发路线
-
-| 版本 | 目标 | 状态 |
-|------|------|------|
-| v1.0 | MVP - 核心功能 | ✅ 已完成 |
-| v1.1 | 稳定性提升 | 📋 计划中 |
-| v1.2 | 权限管控 | 📋 计划中 |
-| v1.3 | 多媒体支持 | 📋 计划中 |
-| v1.4 | 多 Agent 协作 | 📋 计划中 |
-| v2.0 | 平台化 | 🔮 未来规划 |
+- `mail.from` 是必填发件人地址。
+- `mail.enabled` 需要设为 `true` 才会实际发信。
+- 如使用 STARTTLS，一般改为 `secure=false` 和 `port=587`。
+- SMTP 凭据只保存在本地配置，不要发到聊天流或写进 GSD。
 
 ## 已知限制
 
-1. **权限管控功能** - 开发中，当前为 auto 模式
-2. **消息长度限制** - 2000 字符（已支持自动分片）
-3. **多账户支持** - 当前仅支持单账户
-
-## 开发
-
-```bash
-# 开发模式
-npm run dev
-
-# 编译
-npm run build
-
-# 运行
-npm start
-```
-
-## 相关项目
-
-- [wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code) - 微信连接 Claude Code 的参考实现
-- [GSD (Get Shit Done)](https://github.com/gsd-build/get-shit-done) - 上下文工程框架
-- [WeClaw](https://github.com/fastclaw-ai/weclaw) - 微信 ClawBot 桥接工具
+1. **任务分类仍是启发式规则** - 复杂任务可能需要手动复核审批
+2. **rich delivery 已通过当前设备 UAT** - 后续只剩可选的 mixed-mode spot check 与能力扩展，不再阻塞发布
+3. **IMAP / OAuth** - 当前未实现
+4. **多账户支持** - 当前仅支持单账户
 
 ## 许可证
 
@@ -298,8 +129,6 @@ MIT
 
 ---
 
-<p align="center">
-  Made with ❤️ for CLI enthusiasts
-</p>
+**最后更新**: 2026-03-29
 
 [English Documentation](./README.md)

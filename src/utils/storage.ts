@@ -1,26 +1,41 @@
 import path from 'path';
 import fs from 'fs-extra';
-import os from 'os';
-
-const BRIDGE_DIR = path.join(os.homedir(), '.wechat-cli-bridge');
+import { getBridgePaths } from './paths';
 
 export class Storage {
   private baseDir: string;
 
-  constructor(baseDir: string = BRIDGE_DIR) {
+  constructor(baseDir: string = getBridgePaths().homeDir) {
     this.baseDir = baseDir;
-    this.ensureDirs();
   }
 
-  private ensureDirs(): void {
+  private ensureDirsSync(): void {
     const dirs = [
       this.baseDir,
       this.accountsDir,
       this.sessionsDir,
       this.projectsDir,
       this.logsDir,
+      this.attachmentsDir,
     ];
     dirs.forEach(dir => fs.ensureDirSync(dir));
+  }
+
+  async ensureReady(): Promise<void> {
+    const dirs = [
+      this.baseDir,
+      this.accountsDir,
+      this.sessionsDir,
+      this.projectsDir,
+      this.logsDir,
+      this.attachmentsDir,
+    ];
+
+    await Promise.all(dirs.map(dir => fs.ensureDir(dir)));
+  }
+
+  ensureReadySync(): void {
+    this.ensureDirsSync();
   }
 
   // Directory paths
@@ -28,6 +43,7 @@ export class Storage {
   get sessionsDir() { return path.join(this.baseDir, 'sessions'); }
   get projectsDir() { return path.join(this.baseDir, 'projects'); }
   get logsDir() { return path.join(this.baseDir, 'logs'); }
+  get attachmentsDir() { return path.join(this.baseDir, 'attachments'); }
 
   // Config
   async getConfig(): Promise<Record<string, unknown>> {
@@ -39,6 +55,7 @@ export class Storage {
   }
 
   async setConfig(config: Record<string, unknown>): Promise<void> {
+    await this.ensureReady();
     const configPath = path.join(this.baseDir, 'config.json');
     await fs.writeJson(configPath, config, { spaces: 2 });
   }
@@ -53,6 +70,7 @@ export class Storage {
   }
 
   async setAccount(userId: string, data: Record<string, unknown>): Promise<void> {
+    await fs.ensureDir(this.accountsDir);
     const accountPath = path.join(this.accountsDir, `${userId}.json`);
     await fs.writeJson(accountPath, data, { spaces: 2 });
   }
@@ -121,5 +139,32 @@ export class Storage {
   }
 }
 
-export const storage = new Storage();
+let storageInstance: Storage | undefined;
+
+export function initStorage(baseDir?: string): Storage {
+  storageInstance = new Storage(baseDir);
+  storageInstance.ensureReadySync();
+  return storageInstance;
+}
+
+export function getStorage(): Storage {
+  if (!storageInstance) {
+    storageInstance = new Storage();
+  }
+
+  return storageInstance;
+}
+
+export function resetStorageForTests(): void {
+  storageInstance = undefined;
+}
+
+export const storage = new Proxy({} as Storage, {
+  get(_target, property) {
+    const instance = getStorage();
+    const value = Reflect.get(instance, property);
+    return typeof value === 'function' ? value.bind(instance) : value;
+  },
+});
+
 export default storage;

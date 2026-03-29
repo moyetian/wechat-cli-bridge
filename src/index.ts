@@ -1,17 +1,22 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs-extra';
-import os from 'os';
 import { Bridge } from './bridge/core';
 import { BridgeConfig } from './types';
 import { getDefaultAgents } from './agents';
-import logger from './utils/logger';
+import {
+  createDefaultMailChannelConfig,
+  normalizeMailChannelConfig,
+} from './mail';
+import logger, { initLogger } from './utils/logger';
+import { getBridgePaths } from './utils/paths';
+import { initStorage } from './utils/storage';
 
 // Load environment
 dotenv.config();
 
-const BRIDGE_DIR = path.join(os.homedir(), '.wechat-cli-bridge');
-const ACCOUNTS_DIR = path.join(BRIDGE_DIR, 'accounts');
+const DEFAULT_MAX_IMAGE_SIZE_MB = 10;
+const DEFAULT_MAX_FILE_SIZE_MB = 25;
 
 /**
  * Account data structure (new format)
@@ -33,11 +38,18 @@ interface LegacyAccountData {
   createdAt?: string;
 }
 
+function readPositiveNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
+}
+
 /**
  * Load or create configuration
  */
 async function loadConfig(): Promise<BridgeConfig> {
-  const configPath = path.join(BRIDGE_DIR, 'config.json');
+  const paths = getBridgePaths();
+  const configPath = paths.configPath;
   
   if (await fs.pathExists(configPath)) {
     const config = await fs.readJson(configPath);
@@ -54,6 +66,28 @@ async function loadConfig(): Promise<BridgeConfig> {
         mode: config.permission?.mode || 'auto',
         timeout: config.permission?.timeout || 120,
       },
+      media: {
+        maxImageSizeMB: readPositiveNumber(
+          config.media?.maxImageSizeMB,
+          DEFAULT_MAX_IMAGE_SIZE_MB
+        ),
+        maxFileSizeMB: readPositiveNumber(
+          config.media?.maxFileSizeMB,
+          DEFAULT_MAX_FILE_SIZE_MB
+        ),
+      },
+      mail: (() => {
+        const normalized = normalizeMailChannelConfig(config.mail);
+        return {
+          enabled: normalized.enabled,
+          provider: normalized.provider,
+          ...(normalized.from ? { from: normalized.from.address } : {}),
+          ...(normalized.replyTo ? { replyTo: normalized.replyTo.address } : {}),
+          defaultTo: normalized.defaultTo.map(item => item.address),
+          maxAttachmentSizeMB: normalized.maxAttachmentSizeMB,
+          smtp: normalized.smtp,
+        };
+      })(),
       ilink: {
         pollInterval: 30000,
         timeout: 30000,
@@ -75,13 +109,24 @@ async function loadConfig(): Promise<BridgeConfig> {
       mode: 'auto',
       timeout: 120,
     },
+    media: {
+      maxImageSizeMB: DEFAULT_MAX_IMAGE_SIZE_MB,
+      maxFileSizeMB: DEFAULT_MAX_FILE_SIZE_MB,
+    },
+    mail: {
+      enabled: createDefaultMailChannelConfig().enabled,
+      provider: createDefaultMailChannelConfig().provider,
+      defaultTo: createDefaultMailChannelConfig().defaultTo.map(item => item.address),
+      maxAttachmentSizeMB: createDefaultMailChannelConfig().maxAttachmentSizeMB,
+      smtp: createDefaultMailChannelConfig().smtp,
+    },
     ilink: {
       pollInterval: 30000,
       timeout: 30000,
     },
   };
 
-  await fs.ensureDir(BRIDGE_DIR);
+  await fs.ensureDir(paths.homeDir);
   await fs.writeJson(configPath, defaultConfig, { spaces: 2 });
   logger.info(`Created default config at ${configPath}`);
 
@@ -92,22 +137,24 @@ async function loadConfig(): Promise<BridgeConfig> {
  * Load the most recent account
  */
 function loadLatestAccount(): (AccountData & LegacyAccountData) | null {
+  const paths = getBridgePaths();
+
   try {
-    const files = fs.readdirSync(ACCOUNTS_DIR).filter(f => f.endsWith('.json'));
+    const files = fs.readdirSync(paths.accountsDir).filter(f => f.endsWith('.json'));
     if (files.length === 0) return null;
 
     let latestFile = files[0];
     let latestMtime = 0;
 
     for (const file of files) {
-      const stat = fs.statSync(path.join(ACCOUNTS_DIR, file));
+      const stat = fs.statSync(path.join(paths.accountsDir, file));
       if (stat.mtimeMs > latestMtime) {
         latestMtime = stat.mtimeMs;
         latestFile = file;
       }
     }
 
-    return fs.readJsonSync(path.join(ACCOUNTS_DIR, latestFile));
+    return fs.readJsonSync(path.join(paths.accountsDir, latestFile));
   } catch {
     return null;
   }
@@ -156,12 +203,16 @@ async function getCredentials(): Promise<{ token: string; accountId: string; bas
  */
 async function main(): Promise<void> {
   console.log('╔═══════════════════════════════════════╗');
-  console.log('║     WeChat CLI Bridge v1.0.0          ║');
+  console.log('║     WeChat CLI Bridge v1.4.0          ║');
   console.log('║  Connect WeChat to CLI Agents         ║');
   console.log('╚═══════════════════════════════════════╝');
   console.log();
 
   try {
+    const paths = getBridgePaths();
+    initStorage(paths.homeDir);
+    initLogger({ paths });
+
     // Load configuration
     const config = await loadConfig();
     logger.info('Configuration loaded');
@@ -197,4 +248,4 @@ async function main(): Promise<void> {
 }
 
 // Run
-main();
+void main();

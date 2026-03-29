@@ -1,12 +1,9 @@
 import readline from 'readline';
 import path from 'path';
 import fs from 'fs-extra';
-import os from 'os';
+import { getBridgePaths } from './utils/paths';
 
 const DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
-
-const BRIDGE_DIR = path.join(os.homedir(), '.wechat-cli-bridge');
-const ACCOUNTS_DIR = path.join(BRIDGE_DIR, 'accounts');
 
 // ── Login API Types ─────────────────────────────────────────────────────────
 
@@ -116,30 +113,32 @@ async function waitForQrScan(qrcodeId: string): Promise<AccountData> {
 }
 
 function saveAccount(data: AccountData): void {
-  fs.ensureDirSync(ACCOUNTS_DIR);
-  const filePath = path.join(ACCOUNTS_DIR, `${data.accountId}.json`);
+  const paths = getBridgePaths();
+  fs.ensureDirSync(paths.accountsDir);
+  const filePath = path.join(paths.accountsDir, `${data.accountId}.json`);
   fs.writeJsonSync(filePath, data, { spaces: 2 });
   console.log(`✅ 账户已保存: ${data.accountId}`);
 }
 
 function loadLatestAccount(): AccountData | null {
+  const paths = getBridgePaths();
+
   try {
-    const files = fs.readdirSync(ACCOUNTS_DIR).filter(f => f.endsWith('.json'));
+    const files = fs.readdirSync(paths.accountsDir).filter(f => f.endsWith('.json'));
     if (files.length === 0) return null;
 
     let latestFile = files[0];
     let latestMtime = 0;
 
     for (const file of files) {
-      const stat = fs.statSync(path.join(ACCOUNTS_DIR, file));
+      const stat = fs.statSync(path.join(paths.accountsDir, file));
       if (stat.mtimeMs > latestMtime) {
         latestMtime = stat.mtimeMs;
         latestFile = file;
       }
     }
 
-    const accountId = latestFile.replace(/\.json$/, '');
-    return fs.readJsonSync(path.join(ACCOUNTS_DIR, latestFile));
+    return fs.readJsonSync(path.join(paths.accountsDir, latestFile));
   } catch {
     return null;
   }
@@ -246,10 +245,28 @@ async function setup(): Promise<void> {
       mode: 'auto',
       timeout: 120,
     },
+    media: {
+      maxImageSizeMB: 10,
+      maxFileSizeMB: 25,
+    },
+    mail: {
+      enabled: false,
+      provider: 'smtp',
+      defaultTo: [],
+      maxAttachmentSizeMB: 25,
+      smtp: {
+        host: '',
+        port: 465,
+        secure: true,
+        user: '',
+        pass: '',
+      },
+    },
   };
 
-  await fs.ensureDir(BRIDGE_DIR);
-  await fs.writeJson(path.join(BRIDGE_DIR, 'config.json'), config, { spaces: 2 });
+  const paths = getBridgePaths();
+  await fs.ensureDir(paths.homeDir);
+  await fs.writeJson(paths.configPath, config, { spaces: 2 });
 
   console.log();
   console.log('✅ 配置已保存');
