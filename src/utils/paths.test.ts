@@ -25,6 +25,12 @@ describe('paths', () => {
     );
   });
 
+  it('should expand tilde paths with backslashes on Windows-style input', () => {
+    expect(resolveBridgeHome('~\\custom-bridge-home')).toBe(
+      path.join(os.homedir(), 'custom-bridge-home')
+    );
+  });
+
   it('should expose derived paths from bridge home', () => {
     const paths = getBridgePaths('/tmp/wcb-home');
 

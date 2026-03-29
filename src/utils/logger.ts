@@ -83,6 +83,14 @@ export function getLogger(): winston.Logger {
 }
 
 export function resetLoggerForTests(): void {
+  if (loggerInstance) {
+    try {
+      loggerInstance.close();
+    } catch {
+      // Ignore transport shutdown errors in tests.
+    }
+  }
+
   loggerInstance = undefined;
 }
 

@@ -340,6 +340,7 @@ describe('Bridge approval flow', () => {
 
   it('should surface the resolved path when /mailfile attachment preparation fails', async () => {
     const { bridge, ilink, mailSender } = createBridgeHarness('interactive');
+    const expectedResolvedPath = path.resolve('/tmp/project', './missing-file.txt');
 
     await bridge.handleMessage(
       createMessage('/mailfile user@example.com | Report | ./missing-file.txt | Please review')
@@ -348,7 +349,7 @@ describe('Bridge approval flow', () => {
     expect(mailSender.send).not.toHaveBeenCalled();
     expect(ilink.reply).toHaveBeenCalledWith(
       expect.any(Object),
-      expect.stringContaining('解析路径: /tmp/project/missing-file.txt')
+      expect.stringContaining(`解析路径: ${expectedResolvedPath}`)
     );
   });
 

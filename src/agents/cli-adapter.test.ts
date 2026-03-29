@@ -28,6 +28,31 @@ function createMockChild(stdout = '任务完成') {
   return child;
 }
 
+function expectSpawnInvocation(command: string, args: string[], cwd: string): void {
+  if (process.platform === 'win32') {
+    const commandStr = [command, ...args.map(arg => (/\s/.test(arg) ? `"${arg}"` : arg))].join(' ');
+    expect(spawnMock).toHaveBeenCalledWith(
+      commandStr,
+      [],
+      expect.objectContaining({
+        cwd,
+        shell: true,
+        windowsHide: true,
+      })
+    );
+    return;
+  }
+
+  expect(spawnMock).toHaveBeenCalledWith(
+    command,
+    args,
+    expect.objectContaining({
+      cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  );
+}
+
 describe('CLIAdapter permission enforcement', () => {
   beforeEach(() => {
     spawnMock.mockReset();
@@ -56,14 +81,7 @@ describe('CLIAdapter permission enforcement', () => {
       permissionMode: 'acceptEdits',
     });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      'codex',
-      ['--auto-edit', '-p', 'fix auth flow'],
-      expect.objectContaining({
-        cwd: '/tmp/project',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
-    );
+    expectSpawnInvocation('codex', ['--auto-edit', '-p', 'fix auth flow'], '/tmp/project');
   });
 
   it('should escalate approved tasks to auto mode args', async () => {
@@ -88,13 +106,7 @@ describe('CLIAdapter permission enforcement', () => {
       bridgeApproved: true,
     });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      'codex',
-      ['--full-auto', '-p', 'fix auth flow'],
-      expect.objectContaining({
-        cwd: '/tmp/project',
-      })
-    );
+    expectSpawnInvocation('codex', ['--full-auto', '-p', 'fix auth flow'], '/tmp/project');
   });
 
   it('should use stdin prompt flow for multiline positional CLIs', async () => {
@@ -118,13 +130,7 @@ describe('CLIAdapter permission enforcement', () => {
       permissionMode: 'auto',
     });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      'iflow',
-      ['-y', '-p'],
-      expect.objectContaining({
-        cwd: '/tmp/project',
-      })
-    );
+    expectSpawnInvocation('iflow', ['-y', '-p'], '/tmp/project');
     expect(child.stdin.write).toHaveBeenCalledWith('line1\nline2');
     expect(child.stdin.end).toHaveBeenCalled();
   });

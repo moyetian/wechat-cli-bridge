@@ -203,7 +203,7 @@ async function getCredentials(): Promise<{ token: string; accountId: string; bas
  */
 async function main(): Promise<void> {
   console.log('╔═══════════════════════════════════════╗');
-  console.log('║     WeChat CLI Bridge v1.4.0          ║');
+  console.log('║     WeChat CLI Bridge v1.4.1          ║');
   console.log('║  Connect WeChat to CLI Agents         ║');
   console.log('╚═══════════════════════════════════════╝');
   console.log();

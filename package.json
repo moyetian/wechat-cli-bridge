@@ -1,6 +1,6 @@
 {
   "name": "wechat-cli-bridge",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Bridge WeChat ClawBot to multiple CLI agents (iFlow, Codex, Gemini, Claude Code) with context management",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -21,7 +21,7 @@ function expandHomeDir(inputPath: string): string {
     return os.homedir();
   }
 
-  if (inputPath.startsWith(`~${path.sep}`)) {
+  if (/^~[\\/]/.test(inputPath)) {
     return path.join(os.homedir(), inputPath.slice(2));
   }
 

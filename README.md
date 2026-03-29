@@ -1,49 +1,52 @@
 # WeChat CLI Bridge
 
 <p align="center">
-  <strong>让微信控制 CLI Agent 干活</strong>
+  <strong>Control CLI agents from WeChat</strong>
 </p>
 
 <p align="center">
-  <a href="#功能">功能</a> •
-  <a href="#安装">安装</a> •
-  <a href="#使用">使用</a> •
-  <a href="#配置">配置</a> •
-  <a href="#架构">架构</a>
+  <a href="#features">Features</a> •
+  <a href="#installation">Installation</a> •
+  <a href="#usage">Usage</a> •
+  <a href="#configuration">Configuration</a> •
+  <a href="#architecture">Architecture</a>
 </p>
 
 ---
 
-## 功能
+WeChat CLI Bridge lets you control CLI agents such as iFlow, Claude Code, Codex, Gemini, and OpenClaw from WeChat ClawBot, and send results back to the current WeChat conversation.
 
-**微信发一条消息，背后的 CLI 就去读文件、改代码、跑测试，然后把结果发回微信。**
+## Features
 
-- 🤖 **多 Agent 支持** - iFlow CLI、Claude Code、Codex、Gemini CLI、OpenClaw
-- 🔐 **权限模式** - `interactive` / `acceptEdits` / `auto` / `plan`
-- ✅ **审批流** - 待审批请求、批准恢复执行、拒绝和超时失效
-- 🖼️ **富媒体下发** - 支持 `/sendimage` 和 `/sendfile` 将本地图片/文件发到当前微信会话
-- ✉️ **邮件发送** - 支持 `/mail`、`/mailhtml`、`/mailfile` 走 SMTP 发送正文和附件
-- 💾 **上下文管理** - GSD 风格的状态追踪，解决 context rot 问题
-- 🔄 **会话持久化** - 断开重连后继续之前的工作
-- 🛑 **任务取消** - 支持 /cancel 命令中断长时间运行的任务
-- 📁 **目录管理** - 在微信中切换工作目录
+- **Multi-agent support**: iFlow CLI, Claude Code, Codex, Gemini CLI, OpenClaw
+- **Permission modes**: `interactive` / `acceptEdits` / `auto` / `plan`
+- **Approval flow**: pending approvals, approve/resume, deny, timeout expiry
+- **Rich delivery**: send local images and files to the current WeChat conversation with `/sendimage` and `/sendfile`
+- **Mail delivery**: send text, HTML, and attachments over SMTP with `/mail`, `/mailhtml`, `/mailfile`
+- **QR login**: sign in with WeChat QR code
+- **Context management**: GSD-style state tracking
+- **Cross-platform**: Windows and Linux
 
-> 当前版本已完成 bridge 级权限审批、微信侧 rich delivery，以及 SMTP 邮件发送，并已通过真实收件箱 UAT。
+## Current Status
 
-## 原理
+- `v1.2` permission control hardening is complete
+- `v1.3` rich delivery is complete and has passed real-device UAT
+- `v1.4` mail channel has passed real inbox UAT and is release ready
 
-```
-微信 ClawBot
+## How It Works
+
+```text
+WeChat ClawBot
     │
     ▼
-iLink API (HTTP 长轮询，独立协议)
+iLink API (HTTP long polling, standalone protocol)
     │
     ▼
-Bridge Core (~200行胶水层)
+Bridge Core
     │
-    ├── 上下文管理器 (GSD 风格)
+    ├── Context manager (GSD style)
     │
-    └── Agent 适配器
+    └── Agent adapters
             │
             ├── iFlow CLI
             ├── Claude Code
@@ -51,22 +54,23 @@ Bridge Core (~200行胶水层)
             └── Gemini CLI
 ```
 
-**关键点**：
-1. 微信 ClawBot 的 iLink API 是独立的 HTTP 长轮询协议，不依赖 OpenClaw 框架
-2. Agent 适配器把 CLI 工具变成统一的执行接口
-3. 上下文管理器解决长对话中的 context rot 问题
+Key points:
 
-## 安装
+1. WeChat ClawBot uses the standalone iLink HTTP long-polling protocol and does not depend on OpenClaw.
+2. Agent adapters normalize different CLI tools behind one execution interface.
+3. The context manager reduces context rot in long-running conversations.
 
-### 前置条件
+## Installation
+
+### Prerequisites
 
 - Node.js >= 18
-- 微信版本 >= 8.0.70
-- 至少一个 CLI Agent 已安装（iFlow、Claude Code、Codex、Gemini）
+- WeChat >= 8.0.70
+- At least one CLI agent installed locally: iFlow, Claude Code, Codex, or Gemini
 
-### 步骤
+### Steps
 
-**1. 克隆并安装依赖**
+1. Clone the repository and install dependencies.
 
 ```bash
 git clone https://github.com/moyetian/wechat-cli-bridge.git
@@ -75,110 +79,107 @@ npm install
 npm run build
 ```
 
-**2. 在微信中启用 ClawBot**
+2. Enable ClawBot inside WeChat.
 
-- 打开微信 → 我 → 设置 → 插件
-- 找到「ClawBot」并启用
-- 点击进入，复制安装命令
+- Open WeChat -> Me -> Settings -> Plugins
+- Enable `ClawBot`
+- Open it and copy the install command
 
-**3. 运行设置向导**
+3. Run the setup wizard.
 
 ```bash
 npm run setup
-# 或
+# or
 npx wechat-cli-bridge setup
 ```
 
-扫描二维码登录微信 ClawBot。
+Scan the QR code to sign in to WeChat ClawBot.
 
-**4. 启动 Bridge**
+4. Start the bridge.
 
 ```bash
 npm start
-# 或后台运行
+# or run as a daemon
 npm run daemon -- start
 ```
 
-## 使用
+## Usage
 
-### 基本对话
+### Basic Conversation
 
-直接发送消息，使用默认 Agent：
+Send a message directly to use the default agent:
 
-```
-帮我修复 auth.py 的登录 bug
-```
-
-### 指定 Agent
-
-使用前缀指定 Agent：
-
-```
-/iflow 重构 user.js 的代码结构
-/claude 写一个 React 组件
-/codex 添加单元测试
-/gemini 分析这段代码的性能问题
+```text
+Fix the login bug in auth.py
 ```
 
-### 命令
+### Select an Agent Explicitly
 
-| 命令 | 描述 |
+Use an agent prefix at the start of the message:
+
+```text
+/iflow Refactor the structure of user.js
+/claude Build a React component
+/codex Add unit tests
+/gemini Analyze the performance of this code
+```
+
+### Common Commands
+
+| Command | Description |
 |------|------|
-| `/help` | 显示帮助 |
-| `/status` | 查看当前状态 |
-| `/clear` | 清除上下文 |
-| `/history` | 查看任务历史 |
-| `/context` | 查看上下文摘要 |
-| `/cancel` 或 `/stop` | 取消当前正在执行的任务 |
-| `/cd <path>` | 切换工作目录 |
-| `/pwd` | 查看当前目录 |
-| `/sendfile <path>` | 将本地文件作为附件发送到当前微信会话 |
-| `/sendimage <path>` | 将本地图片发送到当前微信会话 |
-| `/permission <mode>` | 切换权限模式 |
-| `/pending` | 查看待审批请求 |
-| `/approve [requestId]` | 批准待审批请求 |
-| `/deny [requestId]` | 拒绝待审批请求 |
-| `/agent [name]` | 查看/切换 Agent |
-| `/mail <to> | <subject> | <body>` | 发送纯文本邮件 |
-| `/mailhtml <to> | <subject> | <html>` | 发送 HTML 邮件 |
-| `/mailfile <to> | <subject> | <path> | [body]` | 发送带附件邮件 |
+| `/help` | Show help |
+| `/status` | Show current status |
+| `/iflow <task>` | Run a task with iFlow |
+| `/claude <task>` | Run a task with Claude Code |
+| `/codex <task>` | Run a task with Codex |
+| `/gemini <task>` | Run a task with Gemini |
+| `/sendimage <path>` | Send a local image to the current WeChat conversation |
+| `/sendfile <path>` | Send a local file as an attachment to the current WeChat conversation |
+| `/mail <to> \| <subject> \| <body>` | Send a plain-text email |
+| `/mailhtml <to> \| <subject> \| <html>` | Send an HTML email |
+| `/mailfile <to> \| <subject> \| <path> \| [body]` | Send an email with an attachment |
+| `/permission <mode>` | Change the permission mode |
+| `/pending` | Show pending approval requests |
+| `/approve [requestId]` | Approve a pending request |
+| `/deny [requestId]` | Deny a pending request |
 
-### 权限模式
+### Permission Behavior
 
-| 模式 | 描述 |
+| Mode | Behavior |
 |------|------|
-| `interactive` | 只读任务直接执行，编辑/执行/网络/破坏性任务先进入 bridge 审批 |
-| `acceptEdits` | 编辑任务直接执行，执行/网络/破坏性任务先进入 bridge 审批 |
-| `auto` | 不经过 bridge 审批，直接以最宽松的 CLI mode 执行 |
-| `plan` | 不启动 Agent，只返回计划说明 |
+| `interactive` | Read-only tasks run directly; edit/execute/network/destructive tasks require bridge approval first |
+| `acceptEdits` | Edit tasks run directly; execute/network/destructive tasks require bridge approval first |
+| `auto` | Run without bridge approval |
+| `plan` | Do not start the agent; return a plan only |
 
-审批快捷回复：
+Approval shortcuts:
 
-- `y` / `yes` / `/approve` → 批准
-- `n` / `no` / `/deny` → 拒绝
+- `y` / `yes` / `/approve`: approve
+- `n` / `no` / `/deny`: deny
 
-### 文件与图片下发
+### File And Image Delivery
 
 ```text
 /sendimage "./artifacts/demo.png"
 /sendfile "./build/My Report.pdf"
 ```
 
-- 路径包含空格时请使用引号。
-- `/sendimage` 只接受受支持图片格式。
-- `/sendfile` 会按普通附件发送，即使目标本身是图片。
-- 也支持自然语言，例如 `把桌面上的 report.pdf 发给我`。
-- 如果你只说“某个文件”，bridge 会追问具体文件名，不会瞎猜。
-- 默认限制：
-  - 图片 10 MB
-  - 文件 25 MB
-- 默认会拒绝 `.ssh`、`.git`、`.env` 等敏感路径。
+- Quote the path if it contains spaces.
+- `/sendimage` only accepts supported image formats.
+- `/sendfile` always sends the target as a normal file attachment, even if the file is an image.
+- Natural-language requests are also supported, for example: `Send the report.pdf on my Desktop to me`.
+- If you only say `some file`, the bridge asks a clarification question instead of guessing.
+- Default limits:
+  - Images: 10 MB
+  - Files: 25 MB
+- Sensitive paths such as `.ssh`, `.git`, and `.env` are rejected by default.
 
-## 配置
+## Configuration
 
-默认配置文件位于 `~/.wechat-cli-bridge/config.json`。
+The default config file lives at `~/.wechat-cli-bridge/config.json`.
 
-如需改到其他目录，可设置环境变量：
+To place it somewhere else, set:
 
 ```bash
 export WECHAT_CLI_BRIDGE_HOME=/path/to/bridge-home
@@ -235,21 +236,24 @@ export WECHAT_CLI_BRIDGE_HOME=/path/to/bridge-home
 }
 ```
 
-如需调大或调小媒体大小限制，修改 `config.json` 中的：
+To change media size limits, update:
 
 - `media.maxImageSizeMB`
 - `media.maxFileSizeMB`
 
-如需启用 SMTP 邮件发送，补全并启用 `mail` 段：
+### Mail Configuration
 
-- `mail.enabled` 需要设为 `true`
-- `mail.from` 是必填发件人地址
-- `mail.smtp.secure=true` 通常对应 `465`，如使用 STARTTLS 一般改为 `secure=false` 和 `587`
-- SMTP 凭据只应保存在本地 `config.json`，不要发到聊天流或写进 GSD
+To enable `/mail`, `/mailhtml`, and `/mailfile`, complete and enable the `mail` section:
 
-### Agent 配置说明
+- `mail.enabled` must be `true`
+- `mail.from` is required
+- `mail.smtp.secure=true` usually goes with port `465`
+- For STARTTLS, use `secure=false` with port `587`
+- Keep SMTP credentials in local `config.json` only, not in chat messages or GSD notes
 
-**CLI 类型**
+### Agent Configuration
+
+CLI example:
 
 ```json
 {
@@ -266,7 +270,7 @@ export WECHAT_CLI_BRIDGE_HOME=/path/to/bridge-home
 }
 ```
 
-**HTTP 类型** (OpenAI 兼容 API)
+HTTP example (OpenAI-compatible API):
 
 ```json
 {
@@ -277,64 +281,62 @@ export WECHAT_CLI_BRIDGE_HOME=/path/to/bridge-home
 }
 ```
 
-## 架构
+## Architecture
 
-### 核心模块
+### Core Modules
 
-```
+```text
 src/
-├── index.ts           # 入口
-├── setup.ts           # 设置向导
+├── index.ts            # entry point
+├── setup.ts            # setup wizard
 ├── bridge/
-│   ├── core.ts        # 核心胶水层 (~200行)
-│   └── ilink-client.ts # iLink API 客户端
+│   ├── core.ts         # bridge core
+│   └── ilink-client.ts # iLink API client
 ├── agents/
-│   ├── base.ts        # Agent 基类
-│   ├── cli-adapter.ts # CLI 适配器
-│   ├── http-adapter.ts # HTTP 适配器
-│   └── index.ts       # Agent 注册
+│   ├── base.ts         # base agent
+│   ├── cli-adapter.ts  # CLI adapter
+│   ├── http-adapter.ts # HTTP adapter
+│   └── index.ts        # agent registry
 ├── context/
-│   └── manager.ts     # 上下文管理器 (GSD 风格)
+│   └── manager.ts      # GSD-style context manager
 ├── commands/
-│   └── handler.ts     # 命令处理器
+│   └── handler.ts      # command handler
 └── utils/
-    ├── logger.ts      # 日志
-    └── storage.ts     # 存储
+    ├── logger.ts       # logging
+    └── storage.ts      # storage
 ```
 
-### 状态文件
+### Runtime State Layout
 
-GSD 风格的状态管理：
-
-```
+```text
 ~/.wechat-cli-bridge/
-├── config.json        # 全局配置
-├── accounts/          # 微信账户凭证
-├── sessions/          # 会话状态
+├── config.json
+├── accounts/
+├── sessions/
 │   └── {user_id}/
-│       ├── session.json  # 会话元数据
-│       ├── STATE.md      # 当前状态
-│       ├── CONTEXT.md    # 上下文摘要
-│       └── HISTORY.md    # 任务历史
-└── logs/              # 日志
+│       ├── session.json
+│       ├── STATE.md
+│       ├── CONTEXT.md
+│       └── HISTORY.md
+└── logs/
 ```
 
-## 开发
+## Development
 
 ```bash
-# 开发模式
+# development mode
 npm run dev
 
-# 编译
+# build
 npm run build
 
-# 运行
+# run
 npm start
 ```
 
-## 验证
+## Verification
 
-当前本地自动化验证基线：
+Current local verification baseline:
 
 ```bash
 npm run build
@@ -342,33 +344,31 @@ npm run lint
 npm test -- --runInBand --ci
 ```
 
-当前测试数：`120`
+Current test count: `121`
 
-GitHub Actions 工作流位于 `.github/workflows/ci.yml`，覆盖：
+GitHub Actions workflow: `.github/workflows/ci.yml`
 
 - Ubuntu / Windows
 - Node.js 18 / 20
 - `build + lint + test`
 
-## 已知限制
+## Known Limitations
 
-1. 任务分类仍是启发式规则，复杂任务可能需要手动复核审批。
-2. rich delivery 已通过当前设备 UAT，后续只剩可选的 mixed-mode spot check 与能力扩展。
-3. 当前未实现 IMAP / OAuth provider。
-4. 当前仍是单账户模型。
+1. Task classification is still heuristic. Complex requests may still require manual review.
+2. Rich delivery has already passed current-device UAT. Remaining work is optional spot checks and capability expansion.
+3. IMAP and OAuth-based mail providers are not implemented yet.
+4. Multi-account support is not implemented yet.
 
-## 相关项目
+## Related Projects
 
-- [wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code) - 微信连接 Claude Code 的参考实现
-- [GSD (Get Shit Done)](https://github.com/gsd-build/get-shit-done) - 上下文工程框架
-- [WeClaw](https://github.com/fastclaw-ai/weclaw) - 微信 ClawBot 桥接工具
+- [wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code)
+- [GSD (Get Shit Done)](https://github.com/gsd-build/get-shit-done)
+- [WeClaw](https://github.com/fastclaw-ai/weclaw)
 
-## 许可证
+## License
 
 MIT
 
 ---
 
-<p align="center">
-  Made with ❤️ for CLI enthusiasts
-</p>
+[中文文档](./README_CN.md)
