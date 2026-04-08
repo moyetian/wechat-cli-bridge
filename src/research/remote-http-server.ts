@@ -1,4 +1,5 @@
 import http from 'http';
+import net from 'net';
 import fs from 'fs-extra';
 import path from 'path';
 import {
@@ -133,6 +134,8 @@ export class RemoteResearchExecutorServer {
 
   private processing = false;
 
+  private sockets = new Set<net.Socket>();
+
   constructor(options: RemoteResearchExecutorServerOptions) {
     this.options = {
       storageDir: path.resolve(options.storageDir),
@@ -165,6 +168,12 @@ export class RemoteResearchExecutorServer {
 
     this.server = http.createServer((request, response) => {
       void this.handleRequest(request, response);
+    });
+    this.server.on('connection', socket => {
+      this.sockets.add(socket);
+      socket.on('close', () => {
+        this.sockets.delete(socket);
+      });
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -200,15 +209,36 @@ export class RemoteResearchExecutorServer {
 
     const server = this.server;
     this.server = undefined;
+    const closeIdleConnections = (server as http.Server & {
+      closeIdleConnections?: () => void;
+      closeAllConnections?: () => void;
+    }).closeIdleConnections?.bind(server);
+    const closeAllConnections = (server as http.Server & {
+      closeIdleConnections?: () => void;
+      closeAllConnections?: () => void;
+    }).closeAllConnections?.bind(server);
+
     await new Promise<void>((resolve, reject) => {
+      const forceCloseTimer = setTimeout(() => {
+        closeIdleConnections?.();
+        closeAllConnections?.();
+        for (const socket of this.sockets) {
+          socket.destroy();
+        }
+      }, 50);
+
       server.close(error => {
+        clearTimeout(forceCloseTimer);
         if (error) {
           reject(error);
           return;
         }
         resolve();
       });
+
+      closeIdleConnections?.();
     });
+    this.sockets.clear();
   }
 
   getBaseUrl(): string {
