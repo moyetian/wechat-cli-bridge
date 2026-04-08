@@ -113,7 +113,10 @@ describe('runM005RemoteProbe', () => {
     });
 
     expect(result.checks.find(item => item.id === 'health')?.status).toBe('fail');
-    expect(result.checks.find(item => item.id === 'health')?.detail).toContain('empty reply');
+    expect(result.checks.find(item => item.id === 'health')?.summary).toBe(
+      '连接在返回 HTTP 响应前被重置'
+    );
+    expect(result.checks.find(item => item.id === 'health')?.detail).toContain('ECONNRESET');
     expect(result.checks.find(item => item.id === 'api_route')?.status).toBe('warn');
   });
 });

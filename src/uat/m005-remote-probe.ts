@@ -203,7 +203,11 @@ function createNetworkFailureCheck(
     };
   }
 
-  if (code === 'ECONNRESET' || normalizedMessage.includes('socket hang up')) {
+  if (
+    code === 'ECONNRESET' ||
+    normalizedMessage.includes('socket hang up') ||
+    normalizedMessage.includes('econnreset')
+  ) {
     return {
       id: checkId,
       status: 'fail',

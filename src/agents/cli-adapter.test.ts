@@ -54,7 +54,12 @@ function expectSpawnInvocation(command: string, args: string[], cwd: string): vo
 }
 
 describe('CLIAdapter permission enforcement', () => {
+  const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  const originalAnthropicAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+
   beforeEach(() => {
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
     spawnMock.mockReset();
     spawnSyncMock.mockReset();
     spawnSyncMock.mockImplementation((command: string, args?: string[]) => {
@@ -64,6 +69,20 @@ describe('CLIAdapter permission enforcement', () => {
 
       return { status: 0, stdout: Buffer.from('') };
     });
+  });
+
+  afterEach(() => {
+    if (originalAnthropicApiKey === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey;
+    }
+
+    if (originalAnthropicAuthToken === undefined) {
+      delete process.env.ANTHROPIC_AUTH_TOKEN;
+    } else {
+      process.env.ANTHROPIC_AUTH_TOKEN = originalAnthropicAuthToken;
+    }
   });
 
   it('should use positional args for codex exec', async () => {
