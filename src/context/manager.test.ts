@@ -164,4 +164,42 @@ describe('ContextManager', () => {
     expect(reloaded.state.approvalRequests[0].status).toBe('expired');
     expect(reloaded.state.pendingExecutions[0].status).toBe('expired');
   });
+
+  it('should persist workflow jobs and sync their approval state', async () => {
+    await manager.load('user-6', {
+      defaultAgent: 'iflow',
+      workingDir: '/tmp/project',
+      permissionMode: 'auto',
+    });
+
+    const approval = await manager.createApprovalRequest('user-6', {
+      tool: 'research_lane',
+      action: '启动 research workflow',
+      category: 'execute',
+      timeout: 120,
+    });
+
+    const job = await manager.createWorkflowJob('user-6', {
+      route: 'research_run_request',
+      lane: 'research',
+      inputText: '开始跑实验，研究小模型路由',
+      summary: '请求启动高成本研究执行工作流',
+      status: 'awaiting_approval',
+      workingDir: '/tmp/project',
+      approvalRequestId: approval.id,
+    });
+
+    expect(job.status).toBe('awaiting_approval');
+
+    await manager.resolveApprovalRequest(
+      'user-6',
+      'approved',
+      approval.id.substring(0, 8)
+    );
+
+    const reloaded = await manager.load('user-6');
+    expect(reloaded.state.workflowJobs).toHaveLength(1);
+    expect(reloaded.state.workflowJobs[0].status).toBe('approved');
+    expect(reloaded.state.workflowJobs[0].route).toBe('research_run_request');
+  });
 });

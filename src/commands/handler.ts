@@ -79,6 +79,11 @@ export const COMMANDS: Record<string, CommandInfo> = {
     requiresArg: false,
     argHint: '[requestId]',
   },
+  recover: {
+    description: '恢复失败的 research run',
+    requiresArg: false,
+    argHint: '[jobId]',
+  },
   
   // Help
   help: { description: '显示帮助信息', requiresArg: false },
@@ -265,6 +270,7 @@ export function generateHelpText(options: HelpTextOptions = {}): string {
       'pending',
       'approve',
       'deny',
+      'recover',
       'help',
       'workdir',
       'agent',
@@ -291,11 +297,15 @@ export function generateHelpText(options: HelpTextOptions = {}): string {
   lines.push('- `/mail to@example.com | Subject | Body`');
   lines.push('- `/mailhtml to@example.com | Subject | <p>HTML</p>`');
   lines.push('- `/mailfile to@example.com | Subject | ./report.pdf | Body`');
+  lines.push('- 也支持自然语言纯文本邮件，例如 `给 user@example.com 发邮件，主题是 周报，内容是 今天已完成修复`');
+  lines.push('- 如果已配置 `mail.defaultTo`，也可以省略收件人');
+  lines.push('- HTML 和附件邮件目前仍建议使用显式命令');
   lines.push('');
   lines.push('## 审批命令');
   lines.push('- /pending: 查看当前待审批请求');
   lines.push('- /approve [requestId]: 批准一个待审批请求');
   lines.push('- /deny [requestId]: 拒绝一个待审批请求');
+  lines.push('- /recover [jobId]: 重试失败的 research run');
 
   return lines.join('\n');
 }

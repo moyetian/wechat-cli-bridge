@@ -1,0 +1,22 @@
+[Unit]
+Description=WeChat CLI Bridge Remote Research Executor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wechat
+Group=wechat
+WorkingDirectory=/opt/wechat-cli-bridge/current
+EnvironmentFile=/etc/wechat-cli-bridge/remote-executor.env
+ExecStart=/usr/bin/node /opt/wechat-cli-bridge/current/dist/research/remote-http-server.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/wechat-cli-bridge/research-executor
+
+[Install]
+WantedBy=multi-user.target

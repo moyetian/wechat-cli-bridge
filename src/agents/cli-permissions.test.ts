@@ -71,12 +71,10 @@ describe('cli permission profiles', () => {
     const codexConfig: AgentConfig = {
       type: 'cli',
       command: 'codex',
+      args: ['exec'],
       permissionProfile: {
-        invocationMode: 'prompt_flag',
-        promptArgs: ['-p'],
+        invocationMode: 'positional',
         permissionArgs: {
-          interactive: ['--suggest'],
-          acceptEdits: ['--auto-edit'],
           auto: ['--full-auto'],
         },
       },
@@ -98,10 +96,10 @@ describe('cli permission profiles', () => {
 
     expect(
       buildCLIInvocationPlan(codexConfig, 'fix auth', 'acceptEdits').args
-    ).toEqual(['--auto-edit', '-p', 'fix auth']);
+    ).toEqual(['exec', 'fix auth']);
     expect(buildCLIInvocationPlan(codexConfig, 'fix auth', 'auto').args).toEqual([
+      'exec',
       '--full-auto',
-      '-p',
       'fix auth',
     ]);
     expect(

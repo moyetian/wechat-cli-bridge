@@ -6,6 +6,16 @@
 
 构建一个桥接工具，让用户可以通过微信 ClawBot 控制 CLI Agent（如 iFlow、Claude Code、Codex、Gemini）执行编程任务。
 
+## Planned Evolution
+
+在当前 bridge release ready 的前提下，已经捕获下一阶段候选方向：
+
+- 让微信前门同时控制 `general cli lane`、`writing lane`、`research lane`
+- 用 `semantic-router` 做意图门控
+- 用 `mem0 + prism-mcp` 做 PRISM 风格上下文与记忆层
+- 用 `WeWrite` 承载公众号文章生产
+- 用 `AI Scientist-v2` 承载异步研究与论文草稿生成
+
 ## Tech Stack
 
 - **Runtime**: Node.js 18+ / TypeScript
@@ -50,6 +60,8 @@ wechat-cli-bridge/
 │   ├── bridge/
 │   │   ├── core.ts        # 核心胶水层
 │   │   └── ilink-client.ts # iLink API
+│   ├── governance/        # workflow gate / compute / release policy
+│   ├── research/          # proposal / executor / recovery
 │   ├── agents/
 │   │   ├── base.ts        # Agent 基类
 │   │   ├── cli-adapter.ts # CLI 执行
@@ -63,6 +75,6 @@ wechat-cli-bridge/
 
 ## Status
 
-**Current Phase**: MVP 完成，核心功能可用
+**Current Phase**: 运行时版本口径现已切到 `v1.5.0`；`M005-v1.5-routed-knowledge-workflows` 已完成 `S01` 到 `S06`，并已补齐 mock worker、mock mode、bridge-local UAT harness、doctor、remote endpoint probe 与 nginx-backed public endpoint；真实微信 article lane 与 research lane 均已完成实机 UAT，公网 remote executor 已完成真实 `submit -> poll -> completed` 验证，当前可视为 release ready
 
-**Last Updated**: 2026-03-23
+**Last Updated**: 2026-04-08

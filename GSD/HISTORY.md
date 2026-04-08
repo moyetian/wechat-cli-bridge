@@ -1,5 +1,855 @@
 # History: WeChat CLI Bridge Development
 
+## 2026-04-08
+
+### Task: release-readiness hardening for deployment defaults and doctor
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已修复 3 个中等级别的 release-readiness 问题：公开部署默认入口改为 nginx `/research-executor`，systemd 文档补齐 `wechat` 用户创建步骤，`m005-doctor` 现会实际探测 `remote_http` endpoint；全量测试提升到 `190`
+- **Scope**: deploy defaults、doctor probe、README / template sync、tests
+
+### Subtask: deploy defaults aligned to nginx public endpoint
+- **Status**: Complete
+- **Files**:
+  - `deploy/remote-executor/docker-compose.yml`
+  - `deploy/remote-executor/README.md`
+  - `templates/config.example.json`
+  - `README.md`
+  - `README_CN.md`
+- **Changes**:
+  - `docker-compose` 默认端口发布已改为 `127.0.0.1:8081:8081`
+  - config / README 默认公网入口已统一到 `http://your-server/research-executor`
+  - probe 示例已不再默认指向裸露 `:8081`
+
+### Subtask: doctor remote_http validation tightened
+- **Status**: Complete
+- **Files**:
+  - `src/uat/m005-doctor.ts`
+  - `src/uat/m005-doctor.test.ts`
+- **Changes**:
+  - `m005-doctor` 现会实际检查 `remote_http` health 与 research API route
+  - reachable remote endpoint 才会给 `research_lane=pass`
+  - unreachable remote endpoint 现在会给 `fail` 并提示运行 `m005-remote-probe`
+- **Verification**:
+  - `npm test -- --runInBand --ci src/uat/m005-doctor.test.ts` → passed
+  - `npm run build` → passed
+  - `npm run lint` → passed
+  - `npm run uat:m005-doctor` → 6 pass / 0 warn / 0 fail
+  - `npm run uat:m005-remote-probe -- --timeout-ms 4000` → 3 pass / 0 warn / 0 fail
+  - `npm test -- --runInBand --ci` → 190 tests passed
+
+### Task: v1.5.0 release packaging
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已将运行时与发布文档口径统一到 `v1.5.0`，并补齐根级 `CHANGELOG.md`，可直接作为 GitHub release 基础材料
+- **Scope**: package version、startup banner、channel version、README、CHANGELOG、GSD sync
+
+### Subtask: runtime version sync
+- **Status**: Complete
+- **Files**:
+  - `package.json`
+  - `package-lock.json`
+  - `src/index.ts`
+  - `src/bridge/ilink-client.ts`
+- **Changes**:
+  - 将 npm package version 从 `1.4.1` 提升到 `1.5.0`
+  - 将启动 banner 切到 `v1.5.0`
+  - 将 channel version fallback 切到 `1.5.0`
+
+### Subtask: release docs sync
+- **Status**: Complete
+- **Files**:
+  - `README.md`
+  - `README_CN.md`
+  - `CHANGELOG.md`
+  - `GSD/PROJECT.md`
+  - `GSD/STATE.md`
+  - `GSD/projects/wechat-cli-bridge.md`
+  - `GSD/sessions/SESSION-2026-04-08.md`
+- **Changes**:
+  - README 首页状态已补 `v1.5.0 release ready`
+  - README / README_CN 当前测试数已从 `121` 校正到 `188`
+  - 新增根级 `CHANGELOG.md`
+  - GSD 已同步“运行时版本口径 = `v1.5.0`”
+
+### Task: M005 public endpoint recovery via nginx reverse proxy
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已将公网 remote executor 入口从不稳定的裸露 `:8081` 收口为稳定的 `http://119.91.50.158/research-executor`，并完成配置切换、probe、doctor 与真实 `submit -> poll -> completed` 验证；`M005` 可标记为 release ready
+- **Scope**: nginx reverse proxy、bridge config switch、public probe、real submit/poll、GSD sync
+
+### Subtask: nginx reverse proxy rollout
+- **Status**: Complete
+- **Files**:
+  - `deploy/remote-executor/nginx.research-executor.conf.example`
+  - `deploy/remote-executor/README.md`
+  - `README.md`
+  - `README_CN.md`
+- **Changes**:
+  - 仓库新增 nginx 反代示例，把 `/research-executor/` 指向 `127.0.0.1:8081`
+  - 云端 `wechat-previews` 站点已增加 `/research-executor/` location
+  - 裸露 `:8081` 不再作为推荐公网入口
+- **Verification**:
+  - 云端 `curl http://127.0.0.1/research-executor/health` → passed
+  - 本机 `curl http://119.91.50.158/research-executor/health` → passed
+
+### Subtask: local config switch and real path verification
+- **Status**: Complete
+- **Files**:
+  - `GSD/PROJECT.md`
+  - `GSD/ROADMAP.md`
+  - `GSD/STATE.md`
+  - `GSD/HISTORY.md`
+  - `GSD/projects/wechat-cli-bridge.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/ROADMAP.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/S06-UAT.md`
+  - `GSD/sessions/SESSION-2026-04-08.md`
+- **Changes**:
+  - 本机 `config.json` 已备份并把 endpoint 从 `http://127.0.0.1:18081` 切到 `http://119.91.50.158/research-executor`
+  - `m005-remote-probe` 现以真实 bridge 配置跑通 `3 pass / 0 warn / 0 fail`
+  - `m005-doctor` 现以真实 bridge 配置跑通 `6 pass / 0 warn / 0 fail`
+  - 新公网入口已完成一轮真实 `submit -> poll -> completed`
+  - 根级与 milestone GSD 已同步到 `M005 release ready`
+- **Verification**:
+  - `npm run uat:m005-remote-probe -- --timeout-ms 4000` → 3 pass / 0 warn / 0 fail
+  - `npm run uat:m005-doctor` → 6 pass / 0 warn / 0 fail
+  - 真实公网 run `nginx-probe-...` → `queued -> running -> completed`
+
+### Task: M005 remote endpoint probe and release gate diagnosis
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已新增 `m005-remote-probe`，把“公网 8081 不可达”从口头现象收敛为可重复执行的诊断命令，并在 2026-04-08 实测确认公网 `119.91.50.158:8081` 当前为 `ETIMEDOUT`，而本机 `127.0.0.1:18081` 仅是 loopback/tunnel endpoint，且在 tunnel 未开启时返回 `ECONNREFUSED`
+- **Scope**: remote probe script、tests、README / deploy docs、GSD sync
+
+### Subtask: remote probe command and tests
+- **Status**: Complete
+- **Files**:
+  - `src/uat/m005-remote-probe.ts`
+  - `src/uat/m005-remote-probe.test.ts`
+  - `package.json`
+- **Changes**:
+  - 新增 `npm run uat:m005-remote-probe`
+  - 已支持探测 `GET /health` 与受保护 API 路由
+  - 已支持区分 loopback/private endpoint 与公网 endpoint
+  - 已支持分类 `ECONNREFUSED`、`ETIMEDOUT`、empty-reply / socket-reset 失败
+- **Verification**:
+  - `npm test -- --runInBand --ci src/uat/m005-remote-probe.test.ts` → passed
+  - `npm run build` → passed
+  - `npm run lint` → passed
+  - `npm test -- --runInBand --ci` → 188 tests passed
+
+### Subtask: live probe result and docs sync
+- **Status**: Complete
+- **Files**:
+  - `README.md`
+  - `README_CN.md`
+  - `deploy/remote-executor/README.md`
+  - `GSD/PROJECT.md`
+  - `GSD/ROADMAP.md`
+  - `GSD/STATE.md`
+  - `GSD/HISTORY.md`
+  - `GSD/projects/wechat-cli-bridge.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/S06-UAT.md`
+  - `GSD/sessions/SESSION-2026-04-08.md`
+- **Changes**:
+  - README 与部署文档新增 remote endpoint probe 用法
+  - 根级与 milestone GSD 已同步到“research UAT 已通过，当前 blocker 是公网直连与 release gate”
+  - 记录 2026-04-08 实测：公网 `http://119.91.50.158:8081/health` 为 `ETIMEDOUT`
+  - 记录 2026-04-08 实测：当前配置 endpoint `http://127.0.0.1:18081` 为 loopback-only，且在 tunnel 未开启时 `ECONNREFUSED`
+
+## 2026-04-07
+
+### Task: Tencent Cloud remote executor live deployment
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已将最小 `remote_http` executor 实际部署到腾讯云 Ubuntu 22.04 + Docker，并完成一轮真实 submit/poll 联调；当前 bridge 已通过 SSH tunnel 接入云端 executor
+- **Scope**: 云端同步、Docker 构建、容器启动、health check、本机 config 切换、doctor 复检、真实 submit/poll UAT
+
+### Subtask: cloud deployment and tunnel fallback
+- **Status**: Complete
+- **Files**:
+  - `GSD/STATE.md`
+  - `GSD/HISTORY.md`
+  - `GSD/sessions/SESSION-2026-04-07.md`
+- **Changes**:
+  - 已将当前工作区同步到腾讯云服务器
+  - 已配置 Docker registry mirror 并成功构建 `wechat-research-remote-executor`
+  - 容器已启动并通过内网 `health` 检查
+  - 已将本机 `config.json` 备份并切到 `research.enabled=true + remote_http`
+  - 因公网 `8081` 仍返回 empty reply，当前 bridge 改为通过 SSH tunnel 连接云端 executor
+- **Verification**:
+  - 腾讯云内 `curl http://127.0.0.1:8081/health` → passed
+  - `npm run uat:m005-doctor` → 6 pass / 0 warn / 0 fail
+  - 真实 `ResearchExecutor.submitRun() -> pollRunStatus()` → completed
+
+### Subtask: real WeChat research run and recovery UAT
+- **Status**: Complete
+- **Files**:
+  - `GSD/STATE.md`
+  - `GSD/HISTORY.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/S06-UAT.md`
+  - `GSD/sessions/SESSION-2026-04-07.md`
+- **Changes**:
+  - 已在真实微信会话中完成一轮 `research request -> /approve -> /status`
+  - 已通过云端 fail-pattern 注入一轮真实 `failed` research run
+  - 已在真实微信会话中完成一轮 `/recover [jobId] -> /status`
+  - 将根级与 milestone `GSD` 更新到“真实 research 与 recovery UAT 已通过，公网直连仍待修复”
+- **Verification**:
+  - 真实微信 research run：job `4d2b25e9-a12c-4a0d-bc04-8848e55fdf8b` → `completed`
+  - 真实微信 recovery run：job `4aa526be-1777-4692-9639-aa5b69dfae89` → `failed -> recovered -> completed`
+
+### Task: M005 minimal remote executor bootstrap
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已为 `remote_http` 路径补上最小可运行 executor 服务骨架，使下一步可以直接转入云端部署与真实 research UAT，而不再停留在 bridge-side contract
+- **Scope**: remote executor service、CLI script、tests、README / GSD sync
+
+### Subtask: remote_http executor service
+- **Status**: Complete
+- **Files**:
+  - `src/research/remote-http-server.ts`
+  - `src/research/remote-http-server.test.ts`
+  - `src/research/index.ts`
+  - `package.json`
+- **Changes**:
+  - 新增最小 `remote_http` executor 服务，支持 `GET /health`、`POST /research-runs`、`GET /research-runs/:runId`
+  - 服务会持久化 request / queue / status / result JSON，并内置简单 worker loop
+  - 已支持可选 bearer auth 与 fail-pattern，便于 `/recover` 验证
+  - 新增 `npm run research:remote-server`
+- **Verification**:
+  - `npm test -- --runInBand --ci src/research/remote-http-server.test.ts src/research/executor.test.ts` → passed
+  - `npm run build` → passed
+  - `npm test -- --runInBand --ci` → 176 tests passed
+
+### Subtask: remote executor deployment assets
+- **Status**: Complete
+- **Files**:
+  - `.dockerignore`
+  - `.env.example`
+  - `templates/config.example.json`
+  - `deploy/remote-executor/Dockerfile`
+  - `deploy/remote-executor/docker-compose.yml`
+  - `deploy/remote-executor/docker.env.example`
+  - `deploy/remote-executor/wechat-research-remote-executor.service`
+  - `deploy/remote-executor/remote-executor.env.example`
+  - `deploy/remote-executor/README.md`
+  - `README.md`
+  - `README_CN.md`
+  - `GSD/STATE.md`
+  - `GSD/HISTORY.md`
+  - `GSD/sessions/SESSION-2026-04-07.md`
+- **Changes**:
+  - 补齐 Docker、Compose、systemd、env-file 与上线说明
+  - Docker 路径改为独立 `docker.env` 管理密钥，并补容器 healthcheck
+  - 为根级环境示例与配置模板补齐 research remote executor 配置
+  - 将根级文档与 GSD 更新到“已具备部署产物，待云端接线”状态
+
+### Task: M005 doctor readiness correction
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已校正 `m005-doctor` 对 research lane 的 readiness 判断，避免在 `research.enabled=false` 时误报为 ready；同时补齐 README 配置示例与 GSD 记录，使下一步真实 research worker 接入更明确
+- **Scope**: doctor 判定逻辑、doctor 测试、README 配置示例、GSD 状态同步
+
+### Subtask: research disabled doctor guard
+- **Status**: Complete
+- **Files**:
+  - `src/uat/m005-doctor.ts`
+  - `src/uat/m005-doctor.test.ts`
+- **Changes**:
+  - `m005-doctor` 现在会在 `research.enabled=false` 时返回显式 `warn`
+  - `nextActions` 现会提示先启用 `research.enabled`
+  - 新增回归测试，覆盖“executor 配置存在但 research 仍 disabled”的场景
+- **Verification**:
+  - `npm test -- --runInBand --ci src/uat/m005-doctor.test.ts` → passed
+  - `npm run build` → passed
+
+### Subtask: research config docs sync
+- **Status**: Complete
+- **Files**:
+  - `README.md`
+  - `README_CN.md`
+  - `GSD/STATE.md`
+  - `GSD/HISTORY.md`
+  - `GSD/sessions/SESSION-2026-04-07.md`
+- **Changes**:
+  - 为 README / README_CN 的配置示例补齐 `research` 段
+  - 增加 `research.enabled`、`remote_http`、`local_gpu` 的启用说明
+  - 将根级 `STATE` 更新到“真实下一步 = 启用 research + 接入真实 worker/endpoint”
+
+## 2026-04-05
+
+### Task: M005 real article lane trusted-directory compatibility
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已为 `codex` 非 git 工作目录执行路径补齐 trusted-directory 兼容，使真实微信 article lane 的 blocker 从“代码层错误”推进为“待实机复测”
+- **Scope**: `codex exec` 调用兼容、单测补强、build/lint/full test 回归、GSD 状态同步
+
+### Subtask: codex repo-check compatibility
+- **Status**: Complete
+- **Files**:
+  - `src/agents/cli-adapter.ts`
+  - `src/agents/cli-adapter.test.ts`
+- **Changes**:
+  - 为 `codex exec` 增加 git work tree 预检
+  - 当 `workingDir` 不在 git 仓库内时，自动追加 `--skip-git-repo-check`
+  - 保持 git repo 内的调用参数不变，避免扩大默认绕过范围
+- **Verification**:
+  - `npm test -- --runInBand --ci src/agents/cli-adapter.test.ts src/agents/cli-permissions.test.ts` → passed
+  - `npm run build` → passed
+  - `npm run lint` → passed
+  - `npm test -- --runInBand --ci` → 171 tests passed
+
+### Subtask: GSD status refresh
+- **Status**: Complete
+- **Files**:
+  - `GSD/PROJECT.md`
+  - `GSD/STATE.md`
+  - `GSD/ROADMAP.md`
+  - `GSD/HISTORY.md`
+  - `GSD/projects/wechat-cli-bridge.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/ROADMAP.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/S06-UAT.md`
+  - `GSD/sessions/SESSION-2026-04-05.md`
+- **Changes**:
+  - 将根级状态从“trusted-directory blocker”更新为“代码已修复，待真实 article lane 复测”
+  - 修正 `M005` 文档中关于真实 WeWrite 安装状态的过期描述
+  - 将最新测试总数同步为 `171`
+
+### Subtask: real article lane UAT closure
+- **Status**: Complete
+- **Files**:
+  - `src/types/index.ts`
+  - `src/agents/cli-adapter.ts`
+  - `src/agents/cli-adapter.test.ts`
+  - `src/writing/contract.ts`
+  - `src/writing/wewrite-adapter.ts`
+  - `src/writing/wewrite-adapter.test.ts`
+  - `src/research/contract.ts`
+  - `src/research/proposal-adapter.ts`
+  - `src/bridge/core.ts`
+  - `src/bridge/core.test.ts`
+- **Changes**:
+  - 为 agent 执行选项增加 `writableDirs`
+  - `codex exec` 已支持向 workflow artifact 目录追加 `--add-dir`
+  - writing / research proposal lane 会将 artifactDir 透传给 agent
+  - WeWrite prompt 已收紧为最小读取集，避免无关目录扫描拖慢真实 UAT
+  - 在真实微信会话中已成功完成 article lane，生成并落盘 `outline.md` / `draft.md`
+- **Verification**:
+  - `npm run build` → passed
+  - `npm run lint` → passed
+  - `npm test -- --runInBand --ci` → 172 tests passed
+  - 真实微信 article lane UAT：job `877be380-b947-4137-af2a-77553cdaf7e5` → `completed`
+
+## 2026-03-31
+
+### Task: M005 S06 Governance, Compute & Release Gate
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已为 `M005` 落地 governance / compute / release gate 第一版，并把 research workflow 的状态轮询与失败恢复接入 bridge
+- **Scope**: governance engine、compute pool、executor polling / recovery、`/status`、`/recover`、tests、GSD / README sync
+
+### Subtask: governance engine 与 compute pool
+- **Status**: Complete
+- **Files**:
+  - `src/governance/engine.ts`
+  - `src/governance/index.ts`
+  - `src/governance/engine.test.ts`
+  - `src/types/index.ts`
+  - `src/context/manager.ts`
+- **Changes**:
+  - 定义 budget / runtime / safety / release gate 评估
+  - 定义 `wechat_realtime / writing_batch / research_sandbox` compute pool
+  - 为 workflow job 增加 `computePool / runId`
+  - 已支持 governance report / release gate artifacts 落盘
+
+### Subtask: executor 状态轮询与恢复
+- **Status**: Complete
+- **Files**:
+  - `src/research/executor.ts`
+  - `src/research/executor.test.ts`
+  - `src/setup.ts`
+- **Changes**:
+  - `local_gpu` 新增 `statusDir / recoveryDir`
+  - 已支持 `pollRunStatus()`
+  - 已支持 `recoverRun()`
+  - 已定义 remote `/research-runs/:runId` 与 local status file contract
+
+### Subtask: bridge 集成与命令面同步
+- **Status**: Complete
+- **Files**:
+  - `src/bridge/core.ts`
+  - `src/bridge/core.test.ts`
+  - `src/commands/handler.ts`
+  - `src/commands/handler.test.ts`
+  - `README.md`
+  - `README_CN.md`
+- **Changes**:
+  - `/status` 会刷新 research run 状态并显示 compute pool
+  - 新增 `/recover [jobId]`
+  - research governance blocked path 会阻止不符合 sandbox policy 的请求
+  - 文档已同步新命令与治理边界
+- **Verification**:
+  - `npm run build` → passed
+  - `npm run lint` → passed
+  - `npm test -- --runInBand --ci` → 161 tests passed
+
+### Subtask: local_gpu mock worker for local UAT
+- **Status**: Complete
+- **Files**:
+  - `src/research/local-gpu-worker.ts`
+  - `src/research/local-gpu-worker.test.ts`
+  - `src/research/index.ts`
+  - `package.json`
+  - `README.md`
+  - `README_CN.md`
+- **Changes**:
+  - 新增可运行的 `local_gpu` mock worker
+  - 已支持消费 queue ticket、写回 `statusDir`
+  - 已支持 `WECHAT_CLI_BRIDGE_MOCK_FAIL_PATTERN` 模拟失败
+  - 已新增 `npm run research:mock-worker`
+- **Verification**:
+  - `npm run research:mock-worker -- --once --queue-dir /tmp/... --status-dir /tmp/...` → passed
+  - `npm test -- --runInBand --ci src/research/local-gpu-worker.test.ts` → passed
+  - 本地 smoke UAT：submit queue -> worker consume -> poll completed → passed
+
+### Subtask: WeWrite mock mode for local article lane UAT
+- **Status**: Complete
+- **Files**:
+  - `src/writing/mock-runner.ts`
+  - `src/writing/wewrite-adapter.ts`
+  - `src/writing/wewrite-adapter.test.ts`
+  - `src/writing/contract.ts`
+  - `src/writing/index.ts`
+  - `src/bridge/core.ts`
+  - `src/bridge/core.test.ts`
+  - `README.md`
+  - `README_CN.md`
+- **Changes**:
+  - 新增 `WECHAT_CLI_BRIDGE_WEWRITE_MOCK_MODE`
+  - article workflow 在 mock mode 下会直接生成 outline / draft
+  - bridge 会将 writing workflow 标记为 `completed`
+  - 用于本地 article lane UAT，不替代真实 WeWrite
+- **Verification**:
+  - `npm test -- --runInBand --ci src/writing/wewrite-adapter.test.ts src/bridge/core.test.ts` → passed
+  - 本地 smoke UAT：mock mode -> prepareWorkflow -> outline/draft generated → passed
+  - `npm test -- --runInBand --ci` → 164 tests passed
+
+### Subtask: one-command local M005 mock UAT runner
+- **Status**: Complete
+- **Files**:
+  - `src/uat/local-m005.ts`
+  - `src/uat/local-m005.test.ts`
+  - `package.json`
+  - `README.md`
+  - `README_CN.md`
+- **Changes**:
+  - 新增 `npm run uat:m005-local`
+  - 一次性执行 article lane mock UAT 与 research lane mock UAT
+  - 自动输出 report、artifactDir、queueDir、statusDir
+- **Verification**:
+  - `npm test -- --runInBand --ci src/uat/local-m005.test.ts src/writing/wewrite-adapter.test.ts src/research/local-gpu-worker.test.ts` → passed
+  - `npm run uat:m005-local` → passed
+
+### Subtask: bridge-equivalent local M005 UAT harness
+- **Status**: Complete
+- **Files**:
+  - `src/uat/bridge-m005.ts`
+  - `src/uat/bridge-m005.test.ts`
+  - `package.json`
+  - `README.md`
+  - `README_CN.md`
+- **Changes**:
+  - 新增 `npm run uat:m005-bridge`
+  - 通过 `Bridge.handleMessage()` 驱动 article、research、`/approve`、mock worker、`/status`
+  - 会保存 transcript 与 markdown report
+- **Verification**:
+  - `npm test -- --runInBand --ci src/uat/bridge-m005.test.ts src/uat/local-m005.test.ts` → passed
+  - `npm run uat:m005-bridge` → passed
+  - `npm test -- --runInBand --ci` → 167 tests passed
+
+### Subtask: M005 doctor and real-UAT readiness report
+- **Status**: Complete
+- **Files**:
+  - `src/uat/m005-doctor.ts`
+  - `src/uat/m005-doctor.test.ts`
+  - `package.json`
+  - `README.md`
+  - `README_CN.md`
+- **Changes**:
+  - 新增 `npm run uat:m005-doctor`
+  - 检查 bridge config、iLink 凭据、WeWrite、writing agents、research runtime、local UAT runner
+  - 会输出 markdown report 与 next actions
+  - 已在当前环境识别出缺少 `config.json`、iLink 凭据与真实 WeWrite
+- **Verification**:
+  - `npm test -- --runInBand --ci src/uat/m005-doctor.test.ts src/uat/bridge-m005.test.ts src/uat/local-m005.test.ts` → passed
+  - `npm run uat:m005-doctor` → passed
+  - `npm test -- --runInBand --ci` → 167 tests passed
+
+### Subtask: WeWrite official OpenClaw install path compatibility
+- **Status**: Complete
+- **Files**:
+  - `src/writing/wewrite-adapter.ts`
+- **Changes**:
+  - 将 `~/.openclaw/skills/wewrite` 与 Windows 对应路径加入默认 WeWrite 探测列表
+  - 避免按官方 README 安装后 bridge 仍无法自动识别 skill
+- **Verification**:
+  - `npm run build` → passed
+  - `npm test -- --runInBand --ci src/writing/wewrite-adapter.test.ts` → passed
+
+### Subtask: WeWrite real installation and bridge-ready verification
+- **Status**: Complete
+- **Files**:
+  - `/home/moyetian/.openclaw/skills/wewrite`
+  - `/home/moyetian/.openclaw/skills/wewrite/config.yaml`
+  - `/home/moyetian/.openclaw/skills/wewrite/style.yaml`
+  - `src/writing/wewrite-adapter.ts`
+  - `src/writing/wewrite-adapter.test.ts`
+- **Changes**:
+  - 完成 `npm run setup`，bridge account 已写入本机 home
+  - 已克隆官方 `WeWrite` 到 OpenClaw skill 路径
+  - 已将 Python 依赖安装到 skill 私有 `.pydeps`
+  - 已生成最小可运行配置，并将 bridge prompt 改为优先使用 skill 私有依赖
+  - 已验证 `WeWriteAdapter` 在真实 skill + `openclaw` 条件下返回 `ready`
+- **Verification**:
+  - `cd ~/.openclaw/skills/wewrite && PYTHONPATH=.pydeps python3 scripts/diagnose.py --json` → passed
+  - `node ... WeWriteAdapter.prepareWorkflow(... openclaw ...)` → status=`ready`
+  - `node ... Bridge.handleMessage("写一篇关于 AI Agent 控制平面的公众号文章")` → job=`completed`, prompt contains real WeWrite path
+
+### Subtask: codex fallback for real WeWrite writing lane
+- **Status**: Complete
+- **Files**:
+  - `src/agents/index.ts`
+  - `src/agents/cli-adapter.ts`
+  - `src/agents/cli-adapter.test.ts`
+  - `src/agents/cli-permissions.test.ts`
+  - `src/writing/wewrite-adapter.ts`
+  - `src/writing/wewrite-adapter.test.ts`
+  - `src/bridge/core.test.ts`
+  - `src/uat/m005-doctor.ts`
+- **Changes**:
+  - `claude` 可用性从“命令存在”升级为“命令存在且已认证/API key 可用”
+  - writing lane 新增 `codex` 作为正式 fallback
+  - `codex` 默认调用方式改为 `codex exec [PROMPT]`
+  - 已验证真实微信 article lane 不再误选 `claude`
+- **Verification**:
+  - `npm run build` → passed
+  - `npm test -- --runInBand --ci src/agents/cli-permissions.test.ts src/agents/cli-adapter.test.ts src/writing/wewrite-adapter.test.ts src/bridge/core.test.ts src/uat/m005-doctor.test.ts` → passed
+  - 真实微信 article lane 最新错误已推进为 `Not inside a trusted directory and --skip-git-repo-check was not specified`
+
+## 2026-03-30
+
+### Task: M005 S05 Sandboxed Research Execution
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已为 `M005` 落地 research executor skeleton，并把批准后的 `research_run_request` 接入 `remote_http / local_gpu` 双后端 submission
+- **Scope**: executor contract、runtime config、submission artifacts、bridge approval integration、tests、GSD sync
+
+### Subtask: research executor 与 runtime config
+- **Status**: Complete
+- **Files**:
+  - `src/research/executor.ts`
+  - `src/research/executor.test.ts`
+  - `src/research/index.ts`
+  - `src/types/index.ts`
+  - `src/index.ts`
+  - `src/setup.ts`
+- **Changes**:
+  - 定义 research executor config
+  - 支持 `remote_http / local_gpu`
+  - 接入默认 research 配置到运行时和 setup
+
+### Subtask: 批准后 submission 接线
+- **Status**: Complete
+- **Files**:
+  - `src/bridge/core.ts`
+  - `src/bridge/core.test.ts`
+- **Changes**:
+  - `research_run_request` 经批准后会真正调用 `ResearchExecutor.submitRun()`
+  - 已落盘 run manifest / runtime config / executor request / queue ticket
+  - local backend 会写入 queue ticket，remote backend 未配置时返回 integration-missing
+- **Verification**:
+  - `npm run build` → passed
+  - `npm run lint` → passed
+  - `npm test -- --runInBand --ci` → 150 tests passed
+
+### Task: M005 S04 Research Proposal Lane
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已为 `M005` 落地 research proposal lane，并把 `research_idea / research_plan` 接入 proposal artifacts 与执行链
+- **Scope**: research adapter、proposal artifacts、bridge integration、tests、GSD sync
+
+### Subtask: research proposal adapter 与 artifacts
+- **Status**: Complete
+- **Files**:
+  - `src/research/contract.ts`
+  - `src/research/proposal-adapter.ts`
+  - `src/research/index.ts`
+  - `src/research/proposal-adapter.test.ts`
+- **Changes**:
+  - 定义 research workflow preparation contract
+  - 已落盘 `research_brief` / `research_proposal` / `research_novelty_check` / `research_budget_estimate` / `research_task`
+  - prompt 已明确禁止直接启动真实实验
+
+### Subtask: bridge proposal lane 集成
+- **Status**: Complete
+- **Files**:
+  - `src/bridge/core.ts`
+  - `src/bridge/core.test.ts`
+- **Changes**:
+  - 已支持 `research_idea / research_plan` 进入 proposal lane
+  - 可直接调用现有 agent 生成 proposal / novelty / budget 草稿
+  - `research_run_request` 仍保留给后续 sandbox execution
+- **Verification**:
+  - `npm run build` → passed
+  - `npm run lint` → passed
+  - `npm test -- --runInBand --ci` → 147 tests passed
+
+### Task: M005 S03 Writing Lane / WeWrite Integration
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已为 `M005` 落地 article workflow artifact model、WeWrite adapter 和 writing lane 执行接线；当本机未安装 WeWrite 时会明确提示并保留 workflow artifact
+- **Scope**: writing adapter、artifact persistence、bridge integration、tests、GSD sync
+
+### Subtask: WeWrite adapter 与 article artifacts
+- **Status**: Complete
+- **Files**:
+  - `src/writing/contract.ts`
+  - `src/writing/wewrite-adapter.ts`
+  - `src/writing/index.ts`
+  - `src/writing/wewrite-adapter.test.ts`
+- **Changes**:
+  - 定义 writing workflow preparation contract
+  - 支持 WeWrite skill 路径探测
+  - 支持 `claude / openclaw` writing lane agent 选择
+  - 已落盘 `article_brief` / `wewrite_task` / `article_outline` / `article_draft`
+
+### Subtask: bridge 写作 lane 集成
+- **Status**: Complete
+- **Files**:
+  - `src/context/manager.ts`
+  - `src/bridge/core.ts`
+  - `src/bridge/core.test.ts`
+- **Changes**:
+  - 已支持 `article_create / article_edit` 进入 writing lane
+  - skill 缺失时会创建 job + artifacts 并给出明确提示
+  - skill 可用且存在 `claude` agent 时会直接触发 writing lane 执行
+- **Verification**:
+  - `npm run build` → passed
+  - `npm run lint` → passed
+  - `npm test -- --runInBand --ci` → 145 tests passed
+
+### Task: M005 S02 PRISM Memory Core
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已为 `M005` 落地第一版 PRISM memory substrate，并把 `quick / standard / deep` 分层上下文接入 `/context` 与 CLI agent 执行路径
+- **Scope**: memory contract、profile selector、memory bundle、bridge integration、tests、GSD sync
+
+### Subtask: memory contract 与 core 实施
+- **Status**: Complete
+- **Files**:
+  - `src/memory/contract.ts`
+  - `src/memory/core.ts`
+  - `src/memory/index.ts`
+  - `src/memory/core.test.ts`
+- **Changes**:
+  - 定义 `MemoryLoadProfile`、`MemoryEntry`、`MemoryBundle`
+  - 新增 `selectMemoryLoadProfile()`
+  - 新增 `PRISMMemoryCore`
+  - 将 memory 分为 `hot / warm / cold`
+
+### Subtask: bridge 接入与验证
+- **Status**: Complete
+- **Files**:
+  - `src/bridge/core.ts`
+  - `src/bridge/core.test.ts`
+- **Changes**:
+  - `/context` 已输出 `standard` 档 PRISM memory
+  - CLI agent 执行已注入 `PRISM Memory (...)` 上下文
+- **Verification**:
+  - `npm run build` → passed
+  - `npm run lint` → passed
+  - `npm test -- --runInBand --ci` → 141 tests passed
+
+### Task: M005 S01 Semantic Gateway & Job Model
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已为 `M005` 落地 workflow route / lane / gate / job 底座，并把 workflow gateway 接入 bridge 主流程
+- **Scope**: routing layer、workflow state model、bridge integration、tests、GSD sync
+
+### Subtask: routing 与 workflow 契约
+- **Status**: Complete
+- **Files**:
+  - `src/types/index.ts`
+  - `src/routing/contract.ts`
+  - `src/routing/router-adapter.ts`
+  - `src/routing/gateway.ts`
+  - `src/routing/index.ts`
+- **Changes**:
+  - 定义 `WorkflowRouteName`、`WorkflowLane`、`WorkflowGateLevel`
+  - 定义 `WorkflowRouteDecision`、`WorkflowJob`、`WorkflowArtifact`
+  - 定义 route catalog 与启发式 router adapter
+
+### Subtask: workflow job 持久化与 bridge 集成
+- **Status**: Complete
+- **Files**:
+  - `src/context/manager.ts`
+  - `src/context/manager.test.ts`
+  - `src/bridge/core.ts`
+  - `src/bridge/core.test.ts`
+- **Changes**:
+  - 为 `ContextState` 增加 `workflowJobs` / `workflowArtifacts`
+  - 新增 workflow job 创建、查询、审批状态同步
+  - 在 `handleTask()` 中接入 routing gateway
+  - `article_* / research_* / status_query` 已与 `general_cli_task` 分流
+  - 高风险 `research_run_request` 进入审批流，但当前仍不直接触发研究执行器
+- **Verification**:
+  - `npm run build` → passed
+  - `npm run lint` → passed
+  - `npm test -- --runInBand --ci` → 137 tests passed
+
+### Subtask: M005 active 切换与 slice 文档
+- **Status**: Complete
+- **Files**:
+  - `GSD/STATE.md`
+  - `GSD/ROADMAP.md`
+  - `GSD/PROJECT.md`
+  - `GSD/projects/wechat-cli-bridge.md`
+  - `GSD/HISTORY.md`
+  - `GSD/sessions/SESSION-2026-03-30.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/README.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/ROADMAP.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/S01-PLAN.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/S01-UAT.md`
+- **Result**:
+  - `M005` 已从 candidate 切到 active milestone
+  - `S01` 已标记为 implemented
+  - 当前下一步明确为 `S02 PRISM Memory Core`
+
+### Task: M005 Candidate Planning Captured
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已把“微信前门 + semantic-router + PRISM memory + WeWrite + AI Scientist-v2”的完整规划写入 GSD，作为 `M005-v1.5-routed-knowledge-workflows` 候选里程碑
+- **Scope**: future milestone planning、root GSD sync、external reference role mapping
+
+### Subtask: 候选里程碑文档
+- **Status**: Complete
+- **Files**:
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/README.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/ROADMAP.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/CONTEXT.md`
+  - `GSD/milestones/M005-v1.5-routed-knowledge-workflows/RESEARCH.md`
+- **Changes**:
+  - 定义 `general cli lane`、`writing lane`、`research lane`
+  - 定义 PRISM 三层：logic / gateway / compute
+  - 定义 `S01` 到 `S06` 的切片顺序和边界
+  - 把 `semantic-router`、`mem0`、`prism-mcp`、`WeWrite`、`AI Scientist-v2` 的职责映射清楚
+
+### Subtask: 根级 GSD 同步
+- **Status**: Complete
+- **Files**:
+  - `GSD/STATE.md`
+  - `GSD/ROADMAP.md`
+  - `GSD/PROJECT.md`
+  - `GSD/projects/wechat-cli-bridge.md`
+  - `GSD/HISTORY.md`
+  - `GSD/sessions/SESSION-2026-03-30.md`
+- **Result**:
+  - 当前 active milestone 仍保持 `M004 release ready`
+  - `M005` 被明确记录为 next candidate，而不是误记为 active
+
+### Task: M004 S01/S02 Natural Mail Intent And Docs Sync
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已为 SMTP 邮件通道增加自然语言纯文本邮件入口，并将根级 GSD 从 `v1.4.0` 漂移状态纠正到当前 `v1.4.1` 口径
+- **Scope**: natural mail parser、bridge integration、help text、README、GSD 文档
+
+### Subtask: 自然语言邮件意图解析
+- **Status**: Complete
+- **Files**:
+  - `src/mail/natural-intent.ts`
+  - `src/mail/natural-intent.test.ts`
+  - `src/mail/index.ts`
+- **Changes**:
+  - 新增自然语言纯文本邮件解析器
+  - 仅在消息中包含明确邮件动作 + 主题/正文标签时触发，避免误拦截普通任务
+  - 支持显式收件人和 `mail.defaultTo` fallback
+  - 缺少收件人/主题/正文时会追问
+- **Verification**:
+  - `npm test -- --runInBand --ci src/mail/natural-intent.test.ts` → passed
+
+### Subtask: Bridge 集成与帮助文案
+- **Status**: Complete
+- **Files**:
+  - `src/bridge/core.ts`
+  - `src/bridge/core.test.ts`
+  - `src/commands/handler.ts`
+  - `README.md`
+  - `README_CN.md`
+- **Changes**:
+  - 在非命令消息路径中接入自然语言邮件分支
+  - 命中自然语言邮件时直接发信，不启动 agent
+  - 为帮助文案与 README 补充自然语言邮件示例与 `mail.defaultTo` 说明
+- **Verification**:
+  - `npm test -- --runInBand --ci src/mail/natural-intent.test.ts src/bridge/core.test.ts src/commands/handler.test.ts` → passed
+  - `npm run build` → passed
+  - `npm run lint` → passed
+
+### Subtask: GSD 记录与版本口径纠偏
+- **Status**: Complete
+- **Files**:
+  - `GSD/STATE.md`
+  - `GSD/ROADMAP.md`
+  - `GSD/HISTORY.md`
+  - `GSD/sessions/SESSION-2026-03-30.md`
+  - `GSD/milestones/M003-v1.4-mail-channel/README.md`
+  - `GSD/milestones/M004-v1.4.1-natural-mail-intent/*`
+- **Result**:
+  - 修正根级 GSD 对实际版本仍停留在 `v1.4.0` 的漂移
+  - 新建 `M004-v1.4.1-natural-mail-intent`
+  - 将当前下一步明确为真实 inbox UAT 与 release gate
+
+### Task: M004 S03 Real Inbox UAT, Setup Fix And Release Gate
+- **Status**: Complete
+- **Agent**: Human + Codex
+- **Result**: 已完成自然语言邮件的真实微信/真实收件箱 UAT，修复 `setup` 覆盖 `mail` 配置的问题，并将 `M004` 标记为 `v1.4.1` release ready
+- **Scope**: real WeChat UAT、real SMTP inbox UAT、setup hardening、GSD 收口
+
+### Subtask: 真实微信与真实收件箱 UAT
+- **Status**: Complete
+- **Environment**:
+  - 本地 UAT home: `/tmp/wcb-uat-home`
+  - 发信链路: Gmail SMTP
+  - 收件箱: QQ Mail
+  - 微信会话: `cd0d19808fb9@im.bot`
+- **Observed Result**:
+  - 显式收件人自然语言邮件 → 成功发送
+  - `mail.defaultTo` fallback → 成功发送
+  - 缺失正文 → 在真实微信会话中正确追问
+
+### Subtask: setup 配置覆盖修复
+- **Status**: Complete
+- **Files**:
+  - `src/setup.ts`
+- **Changes**:
+  - 保留已有 `workingDirectory`、`defaultAgent`、`media`、`permission`
+  - 重新保存配置时保留已有 `mail` 段，不再把 SMTP 配置覆盖成默认空值
+- **Verification**:
+  - `npm run build` → passed
+  - `npm run lint` → passed
+  - `npm test -- --runInBand --ci` → 128 tests passed
+
+### Subtask: M004 release gate 收口
+- **Status**: Complete
+- **Files**:
+  - `GSD/STATE.md`
+  - `GSD/ROADMAP.md`
+  - `GSD/HISTORY.md`
+  - `GSD/sessions/SESSION-2026-03-30.md`
+  - `GSD/milestones/M004-v1.4.1-natural-mail-intent/*`
+- **Result**:
+  - `M004` 已从 in progress 切到 release ready
+  - 当前决定继续维持“HTML/附件邮件走显式命令”的边界
+
 ## 2026-03-29
 
 ### Task: M003 S05 Release Gate And Real Inbox UAT

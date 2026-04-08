@@ -32,6 +32,7 @@ WeChat CLI Bridge lets you control CLI agents such as iFlow, Claude Code, Codex,
 - `v1.2` permission control hardening is complete
 - `v1.3` rich delivery is complete and has passed real-device UAT
 - `v1.4` mail channel has passed real inbox UAT and is release ready
+- `v1.5.0` routed knowledge workflows is release ready, including real article UAT, real research UAT, governance/recovery, and a public nginx-backed research executor endpoint
 
 ## How It Works
 
@@ -143,6 +144,7 @@ Use an agent prefix at the start of the message:
 | `/pending` | Show pending approval requests |
 | `/approve [requestId]` | Approve a pending request |
 | `/deny [requestId]` | Deny a pending request |
+| `/recover [jobId]` | Requeue or resubmit a failed research run |
 
 ### Permission Behavior
 
@@ -157,6 +159,87 @@ Approval shortcuts:
 
 - `y` / `yes` / `/approve`: approve
 - `n` / `no` / `/deny`: deny
+
+### Local Research Mock Worker
+
+Use this when `research.executor.backend=local_gpu` and you want to test the full queue -> status -> recover loop locally before wiring a real worker:
+
+```bash
+npm run research:mock-worker -- --once
+npm run research:mock-worker
+```
+
+- The worker reads queue tickets from `research.executor.localGpu.queueDir`.
+- It writes lifecycle status files to `research.executor.localGpu.statusDir`.
+- Set `WECHAT_CLI_BRIDGE_MOCK_FAIL_PATTERN="some text"` to force matching requests into `failed` status for `/recover` testing.
+
+### Minimal Remote Research Executor
+
+Use this when you want a deployable `remote_http` executor service for a cloud host:
+
+```bash
+npm run research:remote-server -- --host 127.0.0.1 --port 8081 --storage-dir /srv/wechat-cli-bridge/research-executor
+```
+
+- The service exposes `GET /health`, `POST /research-runs`, and `GET /research-runs/:runId`.
+- It persists request, queue, status, and result JSON files under the configured `storageDir`.
+- Use `--api-key` or `WECHAT_CLI_BRIDGE_REMOTE_EXECUTOR_API_KEY` to require bearer auth.
+- Use `--fail-pattern "some text"` to force matching requests into `failed` status and validate `/recover`.
+- Point bridge config at this service with `research.enabled=true`, `research.executor.backend="remote_http"`, and `research.executor.remoteHttp.endpoint`.
+- Deployment artifacts are provided in `deploy/remote-executor/` for Docker, Compose, systemd, and env-file setups.
+
+### M005 Remote Endpoint Probe
+
+Use this when you need to distinguish a server-local endpoint from the recommended public nginx-backed endpoint:
+
+```bash
+npm run uat:m005-remote-probe -- --endpoint http://your-server/research-executor --timeout-ms 4000
+npm run uat:m005-remote-probe -- --endpoint http://127.0.0.1:8081 --timeout-ms 4000
+```
+
+- The probe checks `GET /health` and a protected `GET /research-runs/__m005_probe__` path.
+- It classifies loopback/private endpoints as `warn`, because those do not prove public reachability.
+- It distinguishes `ECONNREFUSED`, timeout, and empty-reply / socket-reset failures.
+- If your bridge config already contains `research.executor.remoteHttp.endpoint` and `apiKey`, you can omit `--endpoint` and `--api-key`.
+- The script writes a markdown report under `uat-reports/` or a `/tmp` fallback.
+- The recommended public endpoint is `http://your-server/research-executor`; keep `127.0.0.1:8081` as the server-local hop behind nginx.
+
+### Local Writing Mock Mode
+
+Use this when you want to run article lane UAT without a real WeWrite skill or a `claude/openclaw` writing agent:
+
+```bash
+export WECHAT_CLI_BRIDGE_WEWRITE_MOCK_MODE=true
+```
+
+- With mock mode enabled, article workflows complete locally.
+- The bridge writes non-placeholder content into `outline.md` and `draft.md`.
+- This is intended for local UAT only, not as a replacement for real WeWrite quality.
+
+### One-Command Local M005 UAT
+
+To run article lane mock UAT and research lane mock UAT together:
+
+```bash
+npm run uat:m005-local
+```
+
+- The runner creates a temporary bridge home.
+- It executes article lane in WeWrite mock mode.
+- It executes research lane through `local_gpu` queue -> worker -> poll.
+- It writes a markdown report and prints the generated artifact paths.
+
+### Bridge-Equivalent Local M005 UAT
+
+To exercise the same flow through `Bridge.handleMessage()`:
+
+```bash
+npm run uat:m005-bridge
+```
+
+- This runner drives article request -> research request -> `/approve` -> mock worker -> `/status`.
+- It records a transcript of bridge replies and markdown messages.
+- It is closer to the real bridge runtime than the lower-level mock runner.
 
 ### File And Image Delivery
 
@@ -232,6 +315,25 @@ export WECHAT_CLI_BRIDGE_HOME=/path/to/bridge-home
       "user": "bot@example.com",
       "pass": "app-password"
     }
+  },
+  "research": {
+    "enabled": false,
+    "executor": {
+      "backend": "remote_http",
+      "maxBudgetUSD": 30,
+      "maxRuntimeMinutes": 240,
+      "allowNetwork": false,
+      "remoteHttp": {
+        "endpoint": "http://localhost:8081",
+        "apiKey": "executor-api-key"
+      },
+      "localGpu": {
+        "queueDir": "~/.wechat-cli-bridge/projects/research-queue",
+        "statusDir": "~/.wechat-cli-bridge/projects/research-queue/status",
+        "recoveryDir": "~/.wechat-cli-bridge/projects/research-queue/recovery",
+        "pythonBin": "python3"
+      }
+    }
   }
 }
 ```
@@ -247,9 +349,23 @@ To enable `/mail`, `/mailhtml`, and `/mailfile`, complete and enable the `mail` 
 
 - `mail.enabled` must be `true`
 - `mail.from` is required
+- `mail.defaultTo` is optional; when set, natural-language plain-text mail can omit recipients
 - `mail.smtp.secure=true` usually goes with port `465`
 - For STARTTLS, use `secure=false` with port `587`
 - Keep SMTP credentials in local `config.json` only, not in chat messages or GSD notes
+
+### Research Configuration
+
+- Set `research.enabled=true` before running real research submissions. When it stays `false`, the bridge only writes runtime artifacts and returns `integration_missing`.
+- Use `research.executor.backend="remote_http"` together with `research.executor.remoteHttp.endpoint` to submit runs to a remote executor.
+- Use `research.executor.backend="local_gpu"` when you have a worker that reads `queueDir` and writes status snapshots to `statusDir`.
+- Keep executor API keys in local `config.json` only.
+
+### Natural-Language Mail
+
+- Plain-text mail also supports natural-language input, for example: `Send an email to user@example.com, subject is Weekly Update, body is The fix is complete`
+- If `mail.defaultTo` is configured, you can also omit recipients: `Send an email, subject is Daily Update, body is Regression is complete`
+- HTML and attachment mail still work best through the explicit commands: `/mailhtml` and `/mailfile`
 
 ### Agent Configuration
 
@@ -344,7 +460,7 @@ npm run lint
 npm test -- --runInBand --ci
 ```
 
-Current test count: `121`
+Current test count: `190`
 
 GitHub Actions workflow: `.github/workflows/ci.yml`
 

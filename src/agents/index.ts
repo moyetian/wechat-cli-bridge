@@ -111,15 +111,12 @@ export function getDefaultAgents(): Record<string, AgentConfig> {
     codex: {
       type: 'cli',
       command: 'codex',
+      args: ['exec'],
       timeout: 600000,
       permissionProfile: {
-        invocationMode: 'prompt_flag',
-        promptArgs: ['-p'],
+        invocationMode: 'positional',
         permissionArgs: {
-          interactive: ['--suggest'],
-          acceptEdits: ['--auto-edit'],
           auto: ['--full-auto'],
-          plan: ['--suggest'],
         },
       },
     },

@@ -13,7 +13,7 @@ import {
 
 export const DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
 export const DEFAULT_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c';
-const CHANNEL_VERSION = process.env.npm_package_version || '1.4.1';
+const CHANNEL_VERSION = process.env.npm_package_version || '1.5.0';
 
 /** Maximum message length for WeChat (conservative limit) */
 const MAX_MESSAGE_LENGTH = 2000;

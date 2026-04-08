@@ -64,5 +64,24 @@
       "user": "bot@example.com",
       "pass": "app-password"
     }
+  },
+  "research": {
+    "enabled": false,
+    "executor": {
+      "backend": "remote_http",
+      "maxBudgetUSD": 30,
+      "maxRuntimeMinutes": 240,
+      "allowNetwork": false,
+      "remoteHttp": {
+        "endpoint": "http://your-server/research-executor",
+        "apiKey": "replace-with-the-same-token"
+      },
+      "localGpu": {
+        "queueDir": "~/.wechat-cli-bridge/projects/research-queue",
+        "statusDir": "~/.wechat-cli-bridge/projects/research-queue/status",
+        "recoveryDir": "~/.wechat-cli-bridge/projects/research-queue/recovery",
+        "pythonBin": "python3"
+      }
+    }
   }
 }

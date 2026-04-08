@@ -73,6 +73,13 @@ describe('parseMessage', () => {
       expect(result.command).toBe('approve');
       expect(result.args).toEqual(['1234abcd']);
     });
+
+    it('should parse /recover with job id', () => {
+      const result = parseMessage('/recover abcd1234');
+      expect(result.isCommand).toBe(true);
+      expect(result.command).toBe('recover');
+      expect(result.args).toEqual(['abcd1234']);
+    });
   });
 
   describe('agent aliases', () => {
@@ -176,6 +183,7 @@ describe('COMMANDS', () => {
     expect(COMMANDS.pending).toBeDefined();
     expect(COMMANDS.approve).toBeDefined();
     expect(COMMANDS.deny).toBeDefined();
+    expect(COMMANDS.recover).toBeDefined();
   });
 
   it('should have correct command info', () => {
@@ -195,5 +203,6 @@ describe('generateHelpText', () => {
     expect(helpText).toContain('图片当前限制: 20 MB');
     expect(helpText).toContain('文件当前限制: 50 MB');
     expect(helpText).toContain('/mail to@example.com | Subject | Body');
+    expect(helpText).toContain('/recover [jobId]: 重试失败的 research run');
   });
 });

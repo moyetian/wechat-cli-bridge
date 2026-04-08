@@ -47,6 +47,8 @@ export interface ExecuteOptions {
   context?: string;
   /** Working directory */
   workingDir: string;
+  /** Additional writable directories for sandboxed CLIs */
+  writableDirs?: string[];
   /** Session ID for resume */
   sessionId?: string;
   /** Project information */
@@ -199,6 +201,10 @@ export interface ContextState {
   approvalRequests: ApprovalRequest[];
   /** Pending task executions waiting on approval or resumption */
   pendingExecutions: PendingTaskExecution[];
+  /** Workflow jobs tracked by the semantic gateway */
+  workflowJobs: WorkflowJob[];
+  /** Workflow artifacts reserved for lane-specific outputs */
+  workflowArtifacts: WorkflowArtifact[];
 }
 
 export interface TaskRecord {
@@ -286,6 +292,87 @@ export interface ParsedCommand {
 }
 
 // ============================================================================
+// Workflow Routing Types
+// ============================================================================
+
+export type WorkflowRouteName =
+  | 'article_create'
+  | 'article_edit'
+  | 'research_idea'
+  | 'research_plan'
+  | 'research_run_request'
+  | 'paper_rewrite'
+  | 'status_query'
+  | 'approval_decision'
+  | 'general_cli_task';
+
+export type WorkflowLane = 'general_cli' | 'writing' | 'research' | 'bridge';
+
+export type WorkflowGateLevel = 'none' | 'review_required' | 'approval_required';
+
+export type WorkflowComputePool =
+  | 'wechat_realtime'
+  | 'writing_batch'
+  | 'research_sandbox';
+
+export interface WorkflowRouteDefinition {
+  route: WorkflowRouteName;
+  lane: WorkflowLane;
+  gate: WorkflowGateLevel;
+  summary: string;
+}
+
+export interface WorkflowRouteDecision {
+  kind: 'workflow' | 'clarify' | 'passthrough';
+  route?: WorkflowRouteName;
+  lane?: WorkflowLane;
+  gate?: WorkflowGateLevel;
+  summary: string;
+  rationale: string;
+  message?: string;
+}
+
+export type WorkflowJobStatus =
+  | 'planned'
+  | 'clarification_needed'
+  | 'awaiting_approval'
+  | 'approved'
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'cancelled'
+  | 'failed';
+
+export interface WorkflowJob {
+  id: string;
+  route: WorkflowRouteName;
+  lane: WorkflowLane;
+  inputText: string;
+  summary: string;
+  rationale?: string;
+  status: WorkflowJobStatus;
+  workingDir: string;
+  source: 'wechat';
+  approvalRequestId?: string;
+  artifactIds: string[];
+  computePool?: WorkflowComputePool;
+  runId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface WorkflowArtifact {
+  id: string;
+  jobId: string;
+  kind: string;
+  label: string;
+  summary?: string;
+  path?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// ============================================================================
 // Config Types
 // ============================================================================
 
@@ -328,6 +415,26 @@ export interface BridgeConfig {
       secure: boolean;
       user: string;
       pass: string;
+    };
+  };
+  /** Research execution settings */
+  research?: {
+    enabled: boolean;
+    executor: {
+      backend: 'remote_http' | 'local_gpu';
+      maxBudgetUSD: number;
+      maxRuntimeMinutes: number;
+      allowNetwork: boolean;
+      remoteHttp?: {
+        endpoint?: string;
+        apiKey?: string;
+      };
+      localGpu?: {
+        queueDir?: string;
+        statusDir?: string;
+        recoveryDir?: string;
+        pythonBin?: string;
+      };
     };
   };
   /** iLink settings */

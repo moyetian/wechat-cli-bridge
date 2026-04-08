@@ -1,6 +1,6 @@
 # M003: v1.4 Mail Channel
 
-**Status**: Active Milestone, S05 In Progress
+**Status**: Release Ready
 
 ## Goal
 

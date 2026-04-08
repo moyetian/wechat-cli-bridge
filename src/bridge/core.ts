@@ -6,7 +6,21 @@ import {
 import { AgentFactory, initializeAgents, CLIAdapter } from '../agents';
 import { ContextManager } from '../context/manager';
 import { parseMessage, generateHelpText } from '../commands/handler';
-import { BridgeConfig, WeChatMessage, SessionContext, PermissionMode } from '../types';
+import {
+  BridgeConfig,
+  WeChatMessage,
+  SessionContext,
+  PermissionMode,
+  WorkflowLane,
+  WorkflowRouteName,
+} from '../types';
+import {
+  assignWorkflowComputePool,
+  evaluateWorkflowGovernance,
+  formatGovernanceSummary,
+  persistWorkflowGovernanceArtifacts,
+  ResearchExecutorPolicy,
+} from '../governance';
 import {
   getPermissionModeDescription,
   isValidPermissionMode,
@@ -23,14 +37,27 @@ import {
   MailMessageDraft,
   normalizeMailChannelConfig,
   parseMailAddressList,
+  resolveNaturalMailIntent,
   SMTPMailSender,
 } from '../mail';
 import { resolveNaturalMediaIntent } from '../media/natural-send';
 import { stageLocalMedia } from '../media/staging';
+import { PRISMMemoryCore } from '../memory';
+import { ResearchExecutor, ResearchProposalAdapter } from '../research';
+import { RoutingGateway } from '../routing';
+import { WeWriteAdapter } from '../writing';
 import storage from '../utils/storage';
 import logger from '../utils/logger';
 import path from 'path';
 import fs from 'fs-extra';
+import { materializeWeChatPreviewHtml } from '../writing/preview';
+import {
+  buildArticlePreviewPublicUrl,
+  publishArticlePreview,
+  resolvePreviewPublishConfig,
+} from '../writing/publisher';
+import { buildArticleImagePlan } from '../writing/image-plan';
+import { resolveArticleImageProvider } from '../writing/image-provider';
 
 /**
  * Bridge Core - The main orchestrator
@@ -44,6 +71,11 @@ export class Bridge {
   private contextManager: ContextManager;
   private config: BridgeConfig;
   private mailSender: SMTPMailSender;
+  private routingGateway: RoutingGateway;
+  private memoryCore: PRISMMemoryCore;
+  private wewriteAdapter: WeWriteAdapter;
+  private researchAdapter: ResearchProposalAdapter;
+  private researchExecutor: ResearchExecutor;
   private running: boolean = false;
 
   // Active task tracking for cancellation
@@ -71,6 +103,11 @@ export class Bridge {
       summarizeThreshold: config.context?.summarizeThreshold || 20000,
     });
     this.mailSender = new SMTPMailSender(normalizeMailChannelConfig(config.mail));
+    this.routingGateway = new RoutingGateway();
+    this.memoryCore = new PRISMMemoryCore(this.contextManager);
+    this.wewriteAdapter = new WeWriteAdapter();
+    this.researchAdapter = new ResearchProposalAdapter();
+    this.researchExecutor = new ResearchExecutor(this.config.research);
 
     logger.info('Bridge initialized');
   }
@@ -183,8 +220,15 @@ export class Bridge {
         break;
 
       case 'context':
-        const summary = await this.contextManager.getSummary(message.from);
-        await this.ilink.sendMarkdown(message.from, summary || '暂无上下文', token);
+        const memoryBundle = await this.memoryCore.loadBundle({
+          userId: message.from,
+          profile: 'standard',
+        });
+        await this.ilink.sendMarkdown(
+          message.from,
+          memoryBundle.rendered || '暂无上下文',
+          token
+        );
         break;
 
       case 'cancel':
@@ -266,6 +310,10 @@ export class Bridge {
         await this.handleApprovalDecision(message, args[0], 'denied');
         break;
 
+      case 'recover':
+        await this.handleRecoverWorkflowJob(message, args[0]);
+        break;
+
       case 'agent':
         if (args[0]) {
           if (this.agents.has(args[0])) {
@@ -340,12 +388,39 @@ export class Bridge {
     targetAgent?: string
   ): Promise<void> {
     const userId = message.from;
+    const naturalMailIntent = await resolveNaturalMailIntent(task, {
+      defaultRecipients: normalizeMailChannelConfig(this.config.mail).defaultTo,
+    });
+
+    if (naturalMailIntent) {
+      await this.handleNaturalMailIntent(message, naturalMailIntent);
+      return;
+    }
+
     const naturalMediaIntent = await resolveNaturalMediaIntent(task, {
       workingDir: context.workingDir,
     });
 
     if (naturalMediaIntent) {
       await this.handleNaturalMediaIntent(message, context, naturalMediaIntent);
+      return;
+    }
+
+    const workflowDecision = await this.routingGateway.routeTask(task);
+    if (workflowDecision.kind === 'clarify') {
+      await this.ilink.reply(
+        message,
+        workflowDecision.message || '⚠️ 我需要更多信息才能决定走哪条 workflow。'
+      );
+      return;
+    }
+
+    if (
+      workflowDecision.kind === 'workflow' &&
+      workflowDecision.route &&
+      workflowDecision.route !== 'general_cli_task'
+    ) {
+      await this.handleWorkflowTask(message, context, task, workflowDecision);
       return;
     }
 
@@ -416,6 +491,7 @@ export class Bridge {
       agentName,
       workingDir: context.workingDir,
       permissionMode: context.permissionMode,
+      route: 'general_cli_task',
     });
   }
 
@@ -426,8 +502,12 @@ export class Bridge {
       task: string;
       agentName: string;
       workingDir: string;
+      writableDirs?: string[];
       requestId?: string;
       permissionMode: PermissionMode;
+      route?: WorkflowRouteName;
+      lane?: WorkflowLane;
+      workflowJobId?: string;
     }
   ): Promise<void> {
     const {
@@ -435,8 +515,12 @@ export class Bridge {
       task,
       agentName,
       workingDir,
+      writableDirs,
       requestId,
       permissionMode,
+      route,
+      lane,
+      workflowJobId,
     } = options;
     const userId = message.from;
     const agent = this.agents.get(agentName);
@@ -451,6 +535,12 @@ export class Bridge {
       startTime: new Date(),
     });
 
+    if (workflowJobId) {
+      await this.contextManager.updateWorkflowJob(userId, workflowJobId, {
+        status: 'running',
+      });
+    }
+
     if (requestId) {
       await this.contextManager.updatePendingExecutionStatus(
         userId,
@@ -459,17 +549,35 @@ export class Bridge {
       );
     }
 
-    const contextSummary = await this.contextManager.getSummary(userId);
+    const memoryBundle = await this.memoryCore.loadBundle({
+      userId,
+      task,
+      route,
+      lane: lane || 'general_cli',
+    });
     await this.ilink.reply(message, `🔄 正在执行 (${agentName})...`);
+    let workflowJobSettled = false;
 
     try {
       const result = await agent.execute(task, {
         workingDir,
+        writableDirs,
         sessionId: context.sessionId,
-        context: contextSummary,
+        context: memoryBundle.rendered,
         permissionMode,
         bridgeApproved: Boolean(requestId),
       });
+
+      const writingArtifacts =
+        result.success &&
+        workflowJobId &&
+        (route === 'article_create' || route === 'article_edit')
+          ? await this.finalizeWritingWorkflowArtifacts(userId, workflowJobId)
+          : null;
+      const filesModified = [...(result.filesModified || [])];
+      if (writingArtifacts?.previewPath && !filesModified.includes(writingArtifacts.previewPath)) {
+        filesModified.push(writingArtifacts.previewPath);
+      }
 
       // Update context
       await this.contextManager.update(userId, {
@@ -477,8 +585,15 @@ export class Bridge {
         result: result.summary,
         agent: agentName,
         success: result.success,
-        filesModified: result.filesModified,
+        filesModified,
       });
+
+      if (workflowJobId) {
+        await this.contextManager.updateWorkflowJob(userId, workflowJobId, {
+          status: result.success ? 'completed' : 'failed',
+        });
+        workflowJobSettled = true;
+      }
 
       // Send result
       const statusIcon = result.success ? '✅' : '❌';
@@ -496,13 +611,44 @@ export class Bridge {
       if (result.filesModified && result.filesModified.length > 0) {
         response += `\n\n📝 修改的文件:\n${result.filesModified.map(f => `- ${f}`).join('\n')}`;
       }
+
+      if (writingArtifacts?.previewPath) {
+        response +=
+          `\n\n📖 公众号预览产物:` +
+          `\n- 提纲: ${writingArtifacts.outlinePath}` +
+          `\n- 草稿: ${writingArtifacts.draftPath}` +
+          `\n- 预览 HTML: ${writingArtifacts.previewPath}`;
+        if (writingArtifacts.publicPreviewUrl) {
+          response += `\n- 预览链接: ${writingArtifacts.publicPreviewUrl}`;
+        }
+      }
       
       if (!result.success && result.error) {
         response += `\n\n❌ 错误: ${result.error.substring(0, 500)}`;
       }
 
-      await this.ilink.reply(message, response);
+      if (writingArtifacts?.publicPreviewUrl && result.success) {
+        await this.ilink.sendMarkdown(
+          message.from,
+          [
+            `${statusIcon} ${result.summary}`,
+            '',
+            `- 公众号预览链接: [点击查看](${writingArtifacts.publicPreviewUrl})`,
+            `- 备用地址: ${writingArtifacts.publicPreviewUrl}`,
+            `- 本地预览文件: ${writingArtifacts.previewPath}`,
+          ].join('\n'),
+          message.contextToken
+        );
+      } else {
+        await this.ilink.reply(message, response);
+      }
     } finally {
+      if (workflowJobId && !workflowJobSettled) {
+        await this.contextManager.updateWorkflowJob(userId, workflowJobId, {
+          status: 'failed',
+        });
+      }
+
       if (requestId) {
         await this.contextManager.updatePendingExecutionStatus(
           userId,
@@ -516,24 +662,609 @@ export class Bridge {
     }
   }
 
+  private async finalizeWritingWorkflowArtifacts(
+    userId: string,
+    workflowJobId: string
+  ): Promise<{
+    outlinePath?: string;
+    draftPath?: string;
+    previewPath?: string;
+    publicPreviewUrl?: string;
+    imagePlanPath?: string;
+    imageAssetsPath?: string;
+  } | null> {
+    const artifacts = await this.contextManager.listWorkflowArtifacts(userId, workflowJobId);
+    const outlineArtifact = artifacts.find(item => item.kind === 'article_outline');
+    const draftArtifact = artifacts.find(item => item.kind === 'article_draft');
+    const previewArtifact = artifacts.find(item => item.kind === 'article_preview_html');
+    const imagePlanArtifact = artifacts.find(item => item.kind === 'article_image_plan');
+    const imageAssetsArtifact = artifacts.find(item => item.kind === 'article_image_assets');
+
+    if (!draftArtifact?.path || !previewArtifact?.path) {
+      return null;
+    }
+
+    if (!(await fs.pathExists(draftArtifact.path))) {
+      return null;
+    }
+
+    const draftMarkdown = await fs.readFile(draftArtifact.path, 'utf8');
+    const imagePlan = buildArticleImagePlan({ draftMarkdown });
+    if (imagePlanArtifact?.path) {
+      await fs.writeJson(imagePlanArtifact.path, imagePlan, { spaces: 2 });
+    }
+
+    const imageProvider = resolveArticleImageProvider();
+    const imageResult = await imageProvider.generate(imagePlan, {
+      artifactDir: path.dirname(draftArtifact.path),
+    });
+    if (imageAssetsArtifact?.path) {
+      await fs.writeJson(
+        imageAssetsArtifact.path,
+        {
+          status: imageResult.status,
+          assets: imageResult.assets.map(asset => ({
+            slotId: asset.slotId,
+            placement: asset.placement,
+            title: asset.title,
+            caption: asset.caption,
+            alt: asset.alt,
+            prompt: asset.prompt,
+            path: asset.path,
+            targetHeading: asset.targetHeading,
+          })),
+        },
+        { spaces: 2 }
+      );
+    }
+
+    const publishConfig = resolvePreviewPublishConfig();
+    const publicPreviewUrl = publishConfig
+      ? buildArticlePreviewPublicUrl(publishConfig.baseUrl, workflowJobId)
+      : undefined;
+    await materializeWeChatPreviewHtml({
+      draftPath: draftArtifact.path,
+      previewPath: previewArtifact.path,
+      publicUrl: publicPreviewUrl,
+      imagePlan,
+      imageAssets: imageResult.assets,
+    });
+    const publishResult = await publishArticlePreview({
+      jobId: workflowJobId,
+      localPreviewPath: previewArtifact.path,
+      config: publishConfig,
+    });
+    if (publishResult.status === 'published' && publishResult.publicUrl) {
+      const existingPublicUrlArtifact = artifacts.find(
+        item =>
+          item.kind === 'article_preview_url' &&
+          item.path === publishResult.publicUrl
+      );
+      if (!existingPublicUrlArtifact) {
+        await this.contextManager.createWorkflowArtifact(userId, {
+          jobId: workflowJobId,
+          kind: 'article_preview_url',
+          label: 'WeChat preview URL',
+          summary: '公众号预览公网链接',
+          path: publishResult.publicUrl,
+        });
+      }
+    }
+
+    return {
+      outlinePath: outlineArtifact?.path,
+      draftPath: draftArtifact.path,
+      previewPath: previewArtifact.path,
+      publicPreviewUrl:
+        publishResult.status === 'published' ? publishResult.publicUrl : undefined,
+      imagePlanPath: imagePlanArtifact?.path,
+      imageAssetsPath: imageAssetsArtifact?.path,
+    };
+  }
+
+  private getResearchExecutorPolicy(): ResearchExecutorPolicy | undefined {
+    if (!this.config.research) {
+      return undefined;
+    }
+
+    return {
+      backend: this.config.research.executor.backend,
+      maxBudgetUSD: this.config.research.executor.maxBudgetUSD,
+      maxRuntimeMinutes: this.config.research.executor.maxRuntimeMinutes,
+      allowNetwork: this.config.research.executor.allowNetwork,
+    };
+  }
+
+  private async persistGovernanceArtifacts(
+    userId: string,
+    jobId: string,
+    route: WorkflowRouteName,
+    lane: WorkflowLane,
+    task: string
+  ): Promise<string[]> {
+    const report = evaluateWorkflowGovernance({
+      route,
+      lane,
+      inputText: task,
+      executorPolicy: lane === 'research' ? this.getResearchExecutorPolicy() : undefined,
+    });
+    const savedArtifactIds: string[] = [];
+    const artifacts = await persistWorkflowGovernanceArtifacts({
+      userId,
+      jobId,
+      report,
+    });
+
+    for (const artifact of artifacts) {
+      const saved = await this.contextManager.createWorkflowArtifact(userId, {
+        jobId,
+        kind: artifact.kind,
+        label: artifact.label,
+        summary: artifact.summary,
+        path: artifact.path,
+      });
+      savedArtifactIds.push(saved.id);
+    }
+
+    return savedArtifactIds;
+  }
+
+  private mapResearchRunStatusToWorkflowStatus(
+    status: Awaited<ReturnType<ResearchExecutor['pollRunStatus']>>['status']
+  ): 'queued' | 'running' | 'completed' | 'failed' | null {
+    switch (status) {
+      case 'queued':
+        return 'queued';
+      case 'running':
+        return 'running';
+      case 'completed':
+        return 'completed';
+      case 'failed':
+        return 'failed';
+      default:
+        return null;
+    }
+  }
+
+  private async refreshResearchWorkflowStatuses(
+    userId: string
+  ): Promise<SessionContext> {
+    const context = await this.contextManager.load(userId, {
+      defaultAgent: this.config.defaultAgent,
+      workingDir: this.config.workingDirectory,
+      permissionMode: this.config.permission.mode,
+    });
+    const researchJobs = context.state.workflowJobs.filter(
+      job =>
+        job.route === 'research_run_request' &&
+        ['queued', 'running'].includes(job.status) &&
+        Boolean(job.runId)
+    );
+
+    if (researchJobs.length === 0) {
+      return context;
+    }
+
+    let changed = false;
+    for (const job of researchJobs) {
+      const statusResult = await this.researchExecutor.pollRunStatus({
+        userId,
+        jobId: job.id,
+        runId: job.runId!,
+      });
+      const mappedStatus = this.mapResearchRunStatusToWorkflowStatus(statusResult.status);
+      if (mappedStatus && mappedStatus !== job.status) {
+        await this.contextManager.updateWorkflowJob(userId, job.id, {
+          status: mappedStatus,
+        });
+        changed = true;
+      }
+
+      const existingArtifacts = await this.contextManager.listWorkflowArtifacts(userId, job.id);
+      if (!existingArtifacts.some(item => item.kind === 'research_executor_status')) {
+        for (const artifact of statusResult.artifacts) {
+          if (artifact.kind !== 'research_executor_status') {
+            continue;
+          }
+
+          await this.contextManager.createWorkflowArtifact(userId, {
+            jobId: job.id,
+            kind: artifact.kind,
+            label: artifact.label,
+            summary: artifact.summary,
+            path: artifact.path,
+          });
+          changed = true;
+        }
+      }
+    }
+
+    if (!changed) {
+      return context;
+    }
+
+    return this.contextManager.load(userId, {
+      defaultAgent: this.config.defaultAgent,
+      workingDir: this.config.workingDirectory,
+      permissionMode: this.config.permission.mode,
+    });
+  }
+
+  private async handleWritingWorkflowTask(
+    message: WeChatMessage,
+    context: SessionContext,
+    task: string,
+    route: Extract<WorkflowRouteName, 'article_create' | 'article_edit'>
+  ): Promise<void> {
+    if (this.activeTasks.has(message.from)) {
+      await this.ilink.reply(message, '⚠️ 已有任务正在执行，请先发送 /cancel 取消');
+      return;
+    }
+
+    const pendingApprovals = await this.contextManager.listPendingApprovals(message.from);
+    if (pendingApprovals.length > 0) {
+      await this.ilink.reply(message, '⚠️ 当前有任务待审批，请先处理 /pending');
+      return;
+    }
+
+    const availableAgents = await this.agents.getAvailable();
+    const summary =
+      route === 'article_edit'
+        ? '编辑或润色现有文章工作流'
+        : '创建新的公众号文章工作流';
+    const computePool = assignWorkflowComputePool('writing', route);
+    const job = await this.contextManager.createWorkflowJob(message.from, {
+      route,
+      lane: 'writing',
+      inputText: task,
+      summary,
+      status: 'planned',
+      workingDir: context.workingDir,
+      computePool,
+    });
+
+    const preparation = await this.wewriteAdapter.prepareWorkflow({
+      route,
+      requestText: task,
+      userId: message.from,
+      jobId: job.id,
+      workingDir: context.workingDir,
+      defaultAgent: context.defaultAgent,
+      availableAgents,
+    });
+
+    const artifactIds = await this.persistGovernanceArtifacts(
+      message.from,
+      job.id,
+      route,
+      'writing',
+      task
+    );
+    for (const artifact of preparation.artifacts) {
+      const saved = await this.contextManager.createWorkflowArtifact(message.from, {
+        jobId: job.id,
+        kind: artifact.kind,
+        label: artifact.label,
+        summary: artifact.summary,
+        path: artifact.path,
+      });
+      artifactIds.push(saved.id);
+    }
+
+    await this.contextManager.updateWorkflowJob(message.from, job.id, {
+      artifactIds,
+      status:
+        preparation.status === 'ready'
+          ? 'queued'
+          : preparation.status === 'completed_local'
+            ? 'completed'
+            : 'planned',
+    });
+
+    if (preparation.status === 'completed_local') {
+      await this.ilink.reply(
+        message,
+        `${preparation.message}\nJob: ${job.id.substring(0, 8)}\nPool: ${computePool}`
+      );
+      return;
+    }
+
+    if (preparation.status !== 'ready' || !preparation.prompt || !preparation.agentName) {
+      await this.ilink.reply(
+        message,
+        `${preparation.message}\nJob: ${job.id.substring(0, 8)}`
+      );
+      return;
+    }
+
+    await this.ilink.reply(
+      message,
+      `📝 已进入 writing lane\nJob: ${job.id.substring(0, 8)}\nPool: ${computePool}\nAgent: ${preparation.agentName}\n正在调用 WeWrite 工作流...`
+    );
+    await this.executeTask(message, {
+      context,
+      task: preparation.prompt,
+      agentName: preparation.agentName,
+      workingDir: context.workingDir,
+      writableDirs: preparation.artifactDir ? [preparation.artifactDir] : undefined,
+      permissionMode: context.permissionMode,
+      route,
+      lane: 'writing',
+      workflowJobId: job.id,
+    });
+  }
+
+  private async handleResearchProposalWorkflowTask(
+    message: WeChatMessage,
+    context: SessionContext,
+    task: string,
+    route: Extract<WorkflowRouteName, 'research_idea' | 'research_plan'>
+  ): Promise<void> {
+    if (this.activeTasks.has(message.from)) {
+      await this.ilink.reply(message, '⚠️ 已有任务正在执行，请先发送 /cancel 取消');
+      return;
+    }
+
+    const pendingApprovals = await this.contextManager.listPendingApprovals(message.from);
+    if (pendingApprovals.length > 0) {
+      await this.ilink.reply(message, '⚠️ 当前有任务待审批，请先处理 /pending');
+      return;
+    }
+
+    const availableAgents = await this.agents.getAvailable();
+    const summary =
+      route === 'research_plan'
+        ? '生成研究计划、预算或可行性分析'
+        : '生成研究想法或选题';
+    const computePool = assignWorkflowComputePool('research', route);
+    const job = await this.contextManager.createWorkflowJob(message.from, {
+      route,
+      lane: 'research',
+      inputText: task,
+      summary,
+      status: 'queued',
+      workingDir: context.workingDir,
+      computePool,
+    });
+
+    const preparation = await this.researchAdapter.prepareWorkflow({
+      route,
+      requestText: task,
+      userId: message.from,
+      jobId: job.id,
+      workingDir: context.workingDir,
+      defaultAgent: context.defaultAgent,
+      availableAgents,
+    });
+
+    const artifactIds = await this.persistGovernanceArtifacts(
+      message.from,
+      job.id,
+      route,
+      'research',
+      task
+    );
+    for (const artifact of preparation.artifacts) {
+      const saved = await this.contextManager.createWorkflowArtifact(message.from, {
+        jobId: job.id,
+        kind: artifact.kind,
+        label: artifact.label,
+        summary: artifact.summary,
+        path: artifact.path,
+      });
+      artifactIds.push(saved.id);
+    }
+
+    await this.contextManager.updateWorkflowJob(message.from, job.id, {
+      artifactIds,
+      status: 'queued',
+    });
+
+    await this.ilink.reply(
+      message,
+      `🔬 已进入 research proposal lane\nJob: ${job.id.substring(0, 8)}\nPool: ${computePool}\nAgent: ${preparation.agentName}\n正在生成研究计划与预算草稿...`
+    );
+    await this.executeTask(message, {
+      context,
+      task: preparation.prompt,
+      agentName: preparation.agentName,
+      workingDir: context.workingDir,
+      writableDirs: [preparation.artifactDir],
+      permissionMode: context.permissionMode,
+      route,
+      lane: 'research',
+      workflowJobId: job.id,
+    });
+  }
+
+  private async handleWorkflowTask(
+    message: WeChatMessage,
+    context: SessionContext,
+    task: string,
+    workflowDecision: Awaited<ReturnType<RoutingGateway['routeTask']>>
+  ): Promise<void> {
+    const userId = message.from;
+    const route = workflowDecision.route;
+    const lane = workflowDecision.lane || 'bridge';
+    const gate = workflowDecision.gate || 'none';
+
+    if (!route) {
+      await this.ilink.reply(message, '⚠️ workflow 路由结果不完整');
+      return;
+    }
+
+    if (route === 'status_query') {
+      await this.sendStatus(message.from, context, message.contextToken);
+      return;
+    }
+
+    if (route === 'article_create' || route === 'article_edit') {
+      await this.handleWritingWorkflowTask(message, context, task, route);
+      return;
+    }
+
+    if (route === 'research_idea' || route === 'research_plan') {
+      await this.handleResearchProposalWorkflowTask(message, context, task, route);
+      return;
+    }
+
+    if (this.activeTasks.has(userId)) {
+      await this.ilink.reply(message, '⚠️ 已有任务正在执行，请先发送 /cancel 取消');
+      return;
+    }
+
+    const pendingApprovals = await this.contextManager.listPendingApprovals(userId);
+    if (pendingApprovals.length > 0) {
+      await this.ilink.reply(message, '⚠️ 当前有任务待审批，请先处理 /pending');
+      return;
+    }
+
+    if (gate === 'approval_required') {
+      const computePool = assignWorkflowComputePool(lane, route);
+      const governanceReport = evaluateWorkflowGovernance({
+        route,
+        lane,
+        inputText: task,
+        executorPolicy: lane === 'research' ? this.getResearchExecutorPolicy() : undefined,
+      });
+      const governanceLines = formatGovernanceSummary(governanceReport);
+
+      if (governanceReport.executionDecision === 'blocked') {
+        const job = await this.contextManager.createWorkflowJob(userId, {
+          route,
+          lane,
+          inputText: task,
+          summary: workflowDecision.summary,
+          rationale: workflowDecision.rationale,
+          status: 'clarification_needed',
+          workingDir: context.workingDir,
+          computePool,
+        });
+        const artifactIds = await this.persistGovernanceArtifacts(
+          userId,
+          job.id,
+          route,
+          lane,
+          task
+        );
+        await this.contextManager.updateWorkflowJob(userId, job.id, {
+          artifactIds,
+        });
+        await this.ilink.reply(
+          message,
+          `🚫 ${route} workflow 被治理门阻断\nJob: ${job.id.substring(0, 8)}\n${governanceLines.join('\n')}\n原因: ${governanceReport.gates.safety.summary}`
+        );
+        return;
+      }
+
+      const approval = await this.contextManager.createApprovalRequest(userId, {
+        tool: `${lane}_lane`,
+        action: `${workflowDecision.summary}: ${task}`,
+        category: 'execute',
+        timeout: this.config.permission.timeout,
+        details: `workflow route=${route}; ${governanceLines.join('; ')}`,
+      });
+      const job = await this.contextManager.createWorkflowJob(userId, {
+        route,
+        lane,
+        inputText: task,
+        summary: workflowDecision.summary,
+        rationale: workflowDecision.rationale,
+        status: 'awaiting_approval',
+        workingDir: context.workingDir,
+        approvalRequestId: approval.id,
+        computePool,
+      });
+      const artifactIds = await this.persistGovernanceArtifacts(
+        userId,
+        job.id,
+        route,
+        lane,
+        task
+      );
+      await this.contextManager.updateWorkflowJob(userId, job.id, {
+        artifactIds,
+      });
+
+      await this.ilink.requestPermission(
+        message.from,
+        {
+          requestId: approval.id.substring(0, 8),
+          tool: approval.tool,
+          action: approval.action,
+          category: approval.category,
+          timeout: approval.timeout,
+        },
+        message.contextToken
+      );
+      await this.ilink.reply(
+        message,
+        `⏸️ 已识别为 ${route} workflow\nJob: ${job.id.substring(0, 8)}\n审批 ID: ${approval.id.substring(0, 8)}\n${governanceLines.join('\n')}\n批准后会提交到 research executor（remote_http 或 local_gpu queue），不会直接在微信会话里同步跑实验。`
+      );
+      return;
+    }
+
+    const status = gate === 'review_required' ? 'planned' : 'planned';
+    const computePool = assignWorkflowComputePool(lane, route);
+    const job = await this.contextManager.createWorkflowJob(userId, {
+      route,
+      lane,
+      inputText: task,
+      summary: workflowDecision.summary,
+      rationale: workflowDecision.rationale,
+      status,
+      workingDir: context.workingDir,
+      computePool,
+    });
+    const artifactIds = await this.persistGovernanceArtifacts(
+      userId,
+      job.id,
+      route,
+      lane,
+      task
+    );
+    await this.contextManager.updateWorkflowJob(userId, job.id, {
+      artifactIds,
+    });
+
+    const laneLabel = lane === 'writing' ? 'writing lane' : 'research lane';
+    await this.ilink.reply(
+      message,
+      `🧭 已识别为 ${route} workflow\nJob: ${job.id.substring(0, 8)}\nLane: ${laneLabel}\nPool: ${computePool}\n当前 M005 S01 只完成语义网关和作业模型，后续会在对应 lane 接入真实执行能力。`
+    );
+  }
+
   /**
    * Send status information
    */
-  private async sendStatus(to: string, context: SessionContext, contextToken?: string): Promise<void> {
+  private async sendStatus(to: string, _context: SessionContext, contextToken?: string): Promise<void> {
+    const refreshedContext = await this.refreshResearchWorkflowStatuses(to);
     const activeTask = this.activeTasks.get(to);
+    const poolCounts = refreshedContext.state.workflowJobs
+      .filter(item => !['completed', 'cancelled', 'failed'].includes(item.status))
+      .reduce<Record<string, number>>((acc, job) => {
+        if (!job.computePool) {
+          return acc;
+        }
+
+        acc[job.computePool] = (acc[job.computePool] || 0) + 1;
+        return acc;
+      }, {});
     
     const lines: string[] = [
       '# 当前状态',
       '',
-      `**Agent**: ${context.defaultAgent}`,
-      `**工作目录**: ${context.workingDir}`,
-      `**权限模式**: ${context.permissionMode}`,
-      `**会话 ID**: ${context.sessionId.substring(0, 8)}...`,
+      `**Agent**: ${refreshedContext.defaultAgent}`,
+      `**工作目录**: ${refreshedContext.workingDir}`,
+      `**权限模式**: ${refreshedContext.permissionMode}`,
+      `**会话 ID**: ${refreshedContext.sessionId.substring(0, 8)}...`,
       '',
-      `**已完成任务**: ${context.state.completedTasks.length}`,
-      `**最近修改**: ${context.state.recentFiles.length} 个文件`,
-      `**待审批请求**: ${context.state.approvalRequests.filter(item => item.status === 'pending').length}`,
-      `**待恢复任务**: ${context.state.pendingExecutions.filter(item => item.status === 'awaiting_approval').length}`,
+      `**已完成任务**: ${refreshedContext.state.completedTasks.length}`,
+      `**最近修改**: ${refreshedContext.state.recentFiles.length} 个文件`,
+      `**待审批请求**: ${refreshedContext.state.approvalRequests.filter(item => item.status === 'pending').length}`,
+      `**待恢复任务**: ${refreshedContext.state.pendingExecutions.filter(item => item.status === 'awaiting_approval').length}`,
+      `**workflow jobs**: ${refreshedContext.state.workflowJobs.filter(item => !['completed', 'cancelled', 'failed'].includes(item.status)).length}`,
+      `**可恢复 failed runs**: ${refreshedContext.state.workflowJobs.filter(item => item.route === 'research_run_request' && item.status === 'failed' && item.runId).length}`,
     ];
 
     if (activeTask) {
@@ -541,9 +1272,28 @@ export class Bridge {
       lines.push('', '**🔄 正在执行任务**', `Agent: ${activeTask.agentName}`, `已运行: ${duration}秒`);
     }
 
-    if (context.state.blockers.length > 0) {
+    if (Object.keys(poolCounts).length > 0) {
+      lines.push('', '**Compute Pools**:');
+      for (const [pool, count] of Object.entries(poolCounts)) {
+        lines.push(`- ${pool}: ${count}`);
+      }
+    }
+
+    if (refreshedContext.state.blockers.length > 0) {
       lines.push('', '**阻塞项**:');
-      context.state.blockers.forEach(b => lines.push(`- ${b}`));
+      refreshedContext.state.blockers.forEach(b => lines.push(`- ${b}`));
+    }
+
+    const workflowJobs = refreshedContext.state.workflowJobs.filter(item =>
+      !['completed', 'cancelled', 'failed'].includes(item.status)
+    );
+    if (workflowJobs.length > 0) {
+      lines.push('', '**Workflow Jobs**:');
+      workflowJobs.slice(0, 5).forEach(job => {
+        const poolSuffix = job.computePool ? `, ${job.computePool}` : '';
+        const runSuffix = job.runId ? `, run=${job.runId}` : '';
+        lines.push(`- [${job.id.substring(0, 8)}] ${job.route} (${job.status}${poolSuffix}${runSuffix})`);
+      });
     }
 
     await this.ilink.sendMarkdown(to, lines.join('\n'), contextToken);
@@ -622,6 +1372,13 @@ export class Bridge {
       approval.id
     );
     if (!execution) {
+      const workflowJob = await this.contextManager.findWorkflowJobByApprovalRequestId(
+        message.from,
+        approval.id
+      );
+      if (workflowJob && decision === 'approved') {
+        await this.handleApprovedWorkflowJob(message, workflowJob);
+      }
       return;
     }
 
@@ -638,6 +1395,133 @@ export class Bridge {
       requestId: approval.id,
       permissionMode: context.permissionMode,
     });
+  }
+
+  private async handleApprovedWorkflowJob(
+    message: WeChatMessage,
+    workflowJob: {
+      id: string;
+      route: WorkflowRouteName;
+      lane: WorkflowLane;
+      inputText: string;
+      workingDir: string;
+      status: string;
+      artifactIds: string[];
+      computePool?: string;
+      runId?: string;
+    }
+  ): Promise<void> {
+    if (workflowJob.route !== 'research_run_request') {
+      await this.ilink.reply(
+        message,
+        `📝 workflow job ${workflowJob.id.substring(0, 8)} 已批准\n当前该 workflow 的实际 lane 执行器仍待接入。`
+      );
+      return;
+    }
+
+    const submission = await this.researchExecutor.submitRun({
+      userId: message.from,
+      jobId: workflowJob.id,
+      requestText: workflowJob.inputText,
+      workingDir: workflowJob.workingDir,
+    });
+
+    const artifactIds = [...workflowJob.artifactIds];
+    for (const artifact of submission.artifacts) {
+      const saved = await this.contextManager.createWorkflowArtifact(message.from, {
+        jobId: workflowJob.id,
+        kind: artifact.kind,
+        label: artifact.label,
+        summary: artifact.summary,
+        path: artifact.path,
+      });
+      artifactIds.push(saved.id);
+    }
+
+    await this.contextManager.updateWorkflowJob(message.from, workflowJob.id, {
+      artifactIds,
+      runId: submission.runId,
+      status:
+        submission.status === 'submitted'
+          ? 'queued'
+          : submission.status === 'failed'
+            ? 'failed'
+            : 'approved',
+    });
+    await this.ilink.reply(
+      message,
+      `${submission.message}\nJob: ${workflowJob.id.substring(0, 8)}\nPool: ${workflowJob.computePool || assignWorkflowComputePool(workflowJob.lane, workflowJob.route)}`
+    );
+  }
+
+  private async handleRecoverWorkflowJob(
+    message: WeChatMessage,
+    jobId: string | undefined
+  ): Promise<void> {
+    const context = await this.refreshResearchWorkflowStatuses(message.from);
+    const failedJobs = context.state.workflowJobs.filter(
+      job =>
+        job.route === 'research_run_request' &&
+        job.status === 'failed' &&
+        Boolean(job.runId)
+    );
+
+    if (failedJobs.length === 0) {
+      await this.ilink.reply(message, '当前没有可恢复的 failed research run');
+      return;
+    }
+
+    const matches = jobId
+      ? failedJobs.filter(job => job.id.startsWith(jobId))
+      : failedJobs;
+
+    if (matches.length === 0) {
+      await this.ilink.reply(message, `⚠️ 没有找到 jobId 以 ${jobId} 开头的 failed research run`);
+      return;
+    }
+
+    if (matches.length > 1) {
+      await this.ilink.reply(
+        message,
+        `⚠️ 匹配到多个 failed research run，请指定 jobId\n可用 Job: ${matches.map(job => job.id.substring(0, 8)).join(', ')}`
+      );
+      return;
+    }
+
+    const job = matches[0];
+    const recovery = await this.researchExecutor.recoverRun({
+      userId: message.from,
+      jobId: job.id,
+      runId: job.runId!,
+    });
+    const artifactIds = [...job.artifactIds];
+    for (const artifact of recovery.artifacts) {
+      const saved = await this.contextManager.createWorkflowArtifact(message.from, {
+        jobId: job.id,
+        kind: artifact.kind,
+        label: artifact.label,
+        summary: artifact.summary,
+        path: artifact.path,
+      });
+      artifactIds.push(saved.id);
+    }
+
+    if (recovery.status === 'requeued' || recovery.status === 'resubmitted') {
+      await this.contextManager.updateWorkflowJob(message.from, job.id, {
+        artifactIds,
+        status: 'queued',
+        runId: recovery.runId,
+      });
+    } else {
+      await this.contextManager.updateWorkflowJob(message.from, job.id, {
+        artifactIds,
+      });
+    }
+
+    await this.ilink.reply(
+      message,
+      `${recovery.message}\nJob: ${job.id.substring(0, 8)}`
+    );
   }
 
   private parseApprovalShortcut(
@@ -709,6 +1593,41 @@ export class Bridge {
       intent.resolvedPath,
       intent.mode
     );
+  }
+
+  private async handleNaturalMailIntent(
+    message: WeChatMessage,
+    intent: Awaited<ReturnType<typeof resolveNaturalMailIntent>>
+  ): Promise<void> {
+    if (!intent) {
+      return;
+    }
+
+    if (
+      intent.kind !== 'resolved' ||
+      !intent.recipients ||
+      !intent.subject ||
+      !intent.textBody
+    ) {
+      await this.ilink.reply(message, intent.message);
+      return;
+    }
+
+    const mailConfig = normalizeMailChannelConfig(this.config.mail);
+    if (!mailConfig.from) {
+      await this.ilink.reply(message, '❌ 邮件配置缺少发件人 from');
+      return;
+    }
+
+    const draft = createMailMessageDraft({
+      from: mailConfig.from,
+      replyTo: mailConfig.replyTo,
+      recipients: { to: intent.recipients },
+      subject: intent.subject,
+      textBody: intent.textBody,
+    });
+
+    await this.sendMailDraft(message, draft);
   }
 
   private async sendResolvedLocalMedia(

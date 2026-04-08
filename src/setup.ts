@@ -2,6 +2,11 @@ import readline from 'readline';
 import path from 'path';
 import fs from 'fs-extra';
 import { getBridgePaths } from './utils/paths';
+import { createDefaultMailChannelConfig, normalizeMailChannelConfig } from './mail';
+import {
+  createDefaultResearchExecutorConfig,
+  normalizeResearchExecutorConfig,
+} from './research';
 
 const DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
 
@@ -144,6 +149,23 @@ function loadLatestAccount(): AccountData | null {
   }
 }
 
+async function loadExistingConfig(): Promise<Record<string, unknown>> {
+  const paths = getBridgePaths();
+
+  try {
+    if (await fs.pathExists(paths.configPath)) {
+      const loaded = await fs.readJson(paths.configPath);
+      if (loaded && typeof loaded === 'object' && !Array.isArray(loaded)) {
+        return loaded as Record<string, unknown>;
+      }
+    }
+  } catch {
+    // Fall back to defaults when the config is missing or unreadable.
+  }
+
+  return {};
+}
+
 // ── Setup Wizard ────────────────────────────────────────────────────────────
 
 async function setup(): Promise<void> {
@@ -156,6 +178,7 @@ async function setup(): Promise<void> {
     input: process.stdin,
     output: process.stdout,
   });
+  const existingConfig = await loadExistingConfig();
 
   // Step 1: Check for existing account or login
   console.log('📱 Step 1: 连接微信 ClawBot');
@@ -202,8 +225,13 @@ async function setup(): Promise<void> {
   console.log();
 
   const defaultDir = process.cwd();
-  const workingDir = await question(rl, `工作目录 (默认: ${defaultDir}): `);
-  const finalDir = workingDir.trim() || defaultDir;
+  const existingWorkingDir =
+    typeof existingConfig.workingDirectory === 'string'
+      ? existingConfig.workingDirectory
+      : undefined;
+  const initialDir = existingWorkingDir || defaultDir;
+  const workingDir = await question(rl, `工作目录 (默认: ${initialDir}): `);
+  const finalDir = workingDir.trim() || initialDir;
 
   if (!fs.pathExistsSync(finalDir)) {
     console.log(`❌ 目录不存在: ${finalDir}`);
@@ -223,7 +251,22 @@ async function setup(): Promise<void> {
   console.log('  5. openclaw - OpenClaw (HTTP)');
   console.log();
 
-  const agentChoice = await question(rl, '选择默认 Agent (1-5, 默认: 1): ');
+  const existingDefaultAgent =
+    typeof existingConfig.defaultAgent === 'string'
+      ? existingConfig.defaultAgent
+      : 'iflow';
+  const reverseAgentMap: Record<string, string> = {
+    iflow: '1',
+    claude: '2',
+    codex: '3',
+    gemini: '4',
+    openclaw: '5',
+  };
+  const defaultAgentChoice = reverseAgentMap[existingDefaultAgent] || '1';
+  const agentChoice = await question(
+    rl,
+    `选择默认 Agent (1-5, 默认: ${defaultAgentChoice}): `
+  );
   const agentMap: Record<string, string> = {
     '1': 'iflow',
     '2': 'claude',
@@ -231,35 +274,99 @@ async function setup(): Promise<void> {
     '4': 'gemini',
     '5': 'openclaw',
   };
-  const defaultAgent = agentMap[agentChoice.trim() || '1'] || 'iflow';
+  const defaultAgent =
+    agentMap[agentChoice.trim() || defaultAgentChoice] || existingDefaultAgent;
+
+  const existingContext =
+    existingConfig.context &&
+    typeof existingConfig.context === 'object' &&
+    !Array.isArray(existingConfig.context)
+      ? (existingConfig.context as Record<string, unknown>)
+      : {};
+  const existingPermission =
+    existingConfig.permission &&
+    typeof existingConfig.permission === 'object' &&
+    !Array.isArray(existingConfig.permission)
+      ? (existingConfig.permission as Record<string, unknown>)
+      : {};
+  const existingMedia =
+    existingConfig.media &&
+    typeof existingConfig.media === 'object' &&
+    !Array.isArray(existingConfig.media)
+      ? (existingConfig.media as Record<string, unknown>)
+      : {};
+  const existingMail = normalizeMailChannelConfig(existingConfig.mail);
+  const defaultMail = createDefaultMailChannelConfig();
+  const existingResearch = normalizeResearchExecutorConfig(existingConfig.research);
+  const defaultResearch = createDefaultResearchExecutorConfig();
 
   // Save configuration
   const config = {
     defaultAgent,
     workingDirectory: finalDir,
     context: {
-      maxHistory: 50,
-      summarizeThreshold: 20000,
+      maxHistory:
+        typeof existingContext.maxHistory === 'number' ? existingContext.maxHistory : 50,
+      summarizeThreshold:
+        typeof existingContext.summarizeThreshold === 'number'
+          ? existingContext.summarizeThreshold
+          : 20000,
     },
     permission: {
-      mode: 'auto',
-      timeout: 120,
+      mode:
+        typeof existingPermission.mode === 'string' ? existingPermission.mode : 'auto',
+      timeout:
+        typeof existingPermission.timeout === 'number'
+          ? existingPermission.timeout
+          : 120,
     },
     media: {
-      maxImageSizeMB: 10,
-      maxFileSizeMB: 25,
+      maxImageSizeMB:
+        typeof existingMedia.maxImageSizeMB === 'number'
+          ? existingMedia.maxImageSizeMB
+          : 10,
+      maxFileSizeMB:
+        typeof existingMedia.maxFileSizeMB === 'number'
+          ? existingMedia.maxFileSizeMB
+          : 25,
     },
     mail: {
-      enabled: false,
-      provider: 'smtp',
-      defaultTo: [],
-      maxAttachmentSizeMB: 25,
+      enabled: existingMail.enabled,
+      provider: existingMail.provider,
+      ...(existingMail.from ? { from: existingMail.from.address } : {}),
+      ...(existingMail.replyTo ? { replyTo: existingMail.replyTo.address } : {}),
+      defaultTo: existingMail.defaultTo.map(item => item.address),
+      maxAttachmentSizeMB: existingMail.maxAttachmentSizeMB,
       smtp: {
-        host: '',
-        port: 465,
-        secure: true,
-        user: '',
-        pass: '',
+        host: existingMail.smtp.host || defaultMail.smtp.host,
+        port: existingMail.smtp.port || defaultMail.smtp.port,
+        secure: existingMail.smtp.secure,
+        user: existingMail.smtp.user || defaultMail.smtp.user,
+        pass: existingMail.smtp.pass || defaultMail.smtp.pass,
+      },
+    },
+    research: {
+      enabled: existingResearch.enabled,
+      executor: {
+        backend: existingResearch.executor.backend,
+        maxBudgetUSD: existingResearch.executor.maxBudgetUSD,
+        maxRuntimeMinutes: existingResearch.executor.maxRuntimeMinutes,
+        allowNetwork: existingResearch.executor.allowNetwork,
+        remoteHttp: existingResearch.executor.remoteHttp,
+        localGpu: {
+          queueDir:
+            existingResearch.executor.localGpu.queueDir ||
+            defaultResearch.executor.localGpu.queueDir,
+          statusDir:
+            existingResearch.executor.localGpu.statusDir ||
+            defaultResearch.executor.localGpu.statusDir,
+          recoveryDir:
+            existingResearch.executor.localGpu.recoveryDir ||
+            defaultResearch.executor.localGpu.recoveryDir,
+          pythonBin:
+            existingResearch.executor.localGpu.pythonBin ||
+            defaultResearch.executor.localGpu.pythonBin,
+        },
       },
     },
   };

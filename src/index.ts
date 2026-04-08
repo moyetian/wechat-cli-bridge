@@ -8,6 +8,10 @@ import {
   createDefaultMailChannelConfig,
   normalizeMailChannelConfig,
 } from './mail';
+import {
+  createDefaultResearchExecutorConfig,
+  normalizeResearchExecutorConfig,
+} from './research';
 import logger, { initLogger } from './utils/logger';
 import { getBridgePaths } from './utils/paths';
 import { initStorage } from './utils/storage';
@@ -88,6 +92,13 @@ async function loadConfig(): Promise<BridgeConfig> {
           smtp: normalized.smtp,
         };
       })(),
+      research: (() => {
+        const normalized = normalizeResearchExecutorConfig(config.research);
+        return {
+          enabled: normalized.enabled,
+          executor: normalized.executor,
+        };
+      })(),
       ilink: {
         pollInterval: 30000,
         timeout: 30000,
@@ -119,6 +130,10 @@ async function loadConfig(): Promise<BridgeConfig> {
       defaultTo: createDefaultMailChannelConfig().defaultTo.map(item => item.address),
       maxAttachmentSizeMB: createDefaultMailChannelConfig().maxAttachmentSizeMB,
       smtp: createDefaultMailChannelConfig().smtp,
+    },
+    research: {
+      enabled: createDefaultResearchExecutorConfig().enabled,
+      executor: createDefaultResearchExecutorConfig().executor,
     },
     ilink: {
       pollInterval: 30000,
@@ -203,7 +218,7 @@ async function getCredentials(): Promise<{ token: string; accountId: string; bas
  */
 async function main(): Promise<void> {
   console.log('╔═══════════════════════════════════════╗');
-  console.log('║     WeChat CLI Bridge v1.4.1          ║');
+  console.log('║     WeChat CLI Bridge v1.5.0          ║');
   console.log('║  Connect WeChat to CLI Agents         ║');
   console.log('╚═══════════════════════════════════════╝');
   console.log();

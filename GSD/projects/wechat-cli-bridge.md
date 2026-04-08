@@ -2,7 +2,7 @@
 
 **Created**: 2026-03-23
 **Repository**: https://github.com/moyetian/wechat-cli-bridge
-**Status**: M002 Release Ready
+**Status**: M005 Release Ready (`v1.5.0` Routed Knowledge Workflows; S06 implemented; local mock/bridge UAT, doctor, remote probe and nginx-backed public endpoint ready; real WeChat article/research UAT passed; public submit/poll endpoint verified)
 
 ## What It Does
 
@@ -36,6 +36,10 @@ npm start
 | `/cd <path>` | 切换目录 |
 | `/sendimage <path>` | 发送本地图片 |
 | `/sendfile <path>` | 发送本地文件附件 |
+| `/mail <to> \| <subject> \| <body>` | 发送纯文本邮件 |
+| `/mailhtml <to> \| <subject> \| <html>` | 发送 HTML 邮件 |
+| `/mailfile <to> \| <subject> \| <path> \| [body]` | 发送带附件邮件 |
+| `/recover [jobId]` | 恢复失败的 research run |
 
 ## Key Files
 

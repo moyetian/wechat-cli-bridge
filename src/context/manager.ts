@@ -9,6 +9,12 @@ import {
   PermissionRequest,
   SessionContext,
   TaskRecord,
+  WorkflowArtifact,
+  WorkflowComputePool,
+  WorkflowJob,
+  WorkflowJobStatus,
+  WorkflowLane,
+  WorkflowRouteName,
 } from '../types';
 import {
   DEFAULT_PERMISSION_TIMEOUT_SECONDS,
@@ -34,6 +40,8 @@ function createDefaultState(): ContextState {
     recentFiles: [],
     approvalRequests: [],
     pendingExecutions: [],
+    workflowJobs: [],
+    workflowArtifacts: [],
   };
 }
 
@@ -285,6 +293,159 @@ export class ContextManager {
     return pendingExecution;
   }
 
+  async createWorkflowJob(
+    userId: string,
+    job: {
+      route: WorkflowRouteName;
+      lane: WorkflowLane;
+      inputText: string;
+      summary: string;
+      rationale?: string;
+      status?: WorkflowJobStatus;
+      workingDir: string;
+      source?: 'wechat';
+      approvalRequestId?: string;
+      artifactIds?: string[];
+      computePool?: WorkflowComputePool;
+      runId?: string;
+    }
+  ): Promise<WorkflowJob> {
+    const context = await this.load(userId);
+    const now = new Date();
+    const workflowJob: WorkflowJob = {
+      id: uuidv4(),
+      route: job.route,
+      lane: job.lane,
+      inputText: job.inputText,
+      summary: job.summary,
+      rationale: job.rationale,
+      status: job.status || 'planned',
+      workingDir: job.workingDir,
+      source: job.source || 'wechat',
+      approvalRequestId: job.approvalRequestId,
+      artifactIds: job.artifactIds || [],
+      computePool: job.computePool,
+      runId: job.runId,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    context.state.workflowJobs.push(workflowJob);
+    context.lastActivity = now;
+    await this.save(context);
+
+    return workflowJob;
+  }
+
+  async listWorkflowJobs(userId: string): Promise<WorkflowJob[]> {
+    const context = await this.load(userId);
+    return [...context.state.workflowJobs].sort(
+      (left, right) => right.createdAt.getTime() - left.createdAt.getTime()
+    );
+  }
+
+  async findWorkflowJobByApprovalRequestId(
+    userId: string,
+    requestId: string
+  ): Promise<WorkflowJob | null> {
+    const context = await this.load(userId);
+    return (
+      context.state.workflowJobs.find(job => job.approvalRequestId === requestId) || null
+    );
+  }
+
+  async updateWorkflowJob(
+    userId: string,
+    jobId: string,
+    update: {
+      status?: WorkflowJobStatus;
+      summary?: string;
+      rationale?: string;
+      approvalRequestId?: string;
+      artifactIds?: string[];
+      computePool?: WorkflowComputePool;
+      runId?: string;
+    }
+  ): Promise<WorkflowJob | null> {
+    const context = await this.load(userId);
+    const job = context.state.workflowJobs.find(item => item.id === jobId);
+
+    if (!job) {
+      return null;
+    }
+
+    if (update.status) {
+      job.status = update.status;
+    }
+    if (update.summary) {
+      job.summary = update.summary;
+    }
+    if (update.rationale !== undefined) {
+      job.rationale = update.rationale;
+    }
+    if (update.approvalRequestId !== undefined) {
+      job.approvalRequestId = update.approvalRequestId;
+    }
+    if (update.artifactIds) {
+      job.artifactIds = update.artifactIds;
+    }
+    if (update.computePool !== undefined) {
+      job.computePool = update.computePool;
+    }
+    if (update.runId !== undefined) {
+      job.runId = update.runId;
+    }
+    job.updatedAt = new Date();
+    context.lastActivity = new Date();
+    await this.save(context);
+
+    return job;
+  }
+
+  async createWorkflowArtifact(
+    userId: string,
+    artifact: {
+      jobId: string;
+      kind: string;
+      label: string;
+      summary?: string;
+      path?: string;
+    }
+  ): Promise<WorkflowArtifact> {
+    const context = await this.load(userId);
+    const now = new Date();
+    const workflowArtifact: WorkflowArtifact = {
+      id: uuidv4(),
+      jobId: artifact.jobId,
+      kind: artifact.kind,
+      label: artifact.label,
+      summary: artifact.summary,
+      path: artifact.path,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    context.state.workflowArtifacts.push(workflowArtifact);
+    context.lastActivity = now;
+    await this.save(context);
+
+    return workflowArtifact;
+  }
+
+  async listWorkflowArtifacts(
+    userId: string,
+    jobId?: string
+  ): Promise<WorkflowArtifact[]> {
+    const context = await this.load(userId);
+    const artifacts = jobId
+      ? context.state.workflowArtifacts.filter(item => item.jobId === jobId)
+      : context.state.workflowArtifacts;
+
+    return [...artifacts].sort(
+      (left, right) => right.createdAt.getTime() - left.createdAt.getTime()
+    );
+  }
+
   async listPendingExecutions(userId: string): Promise<PendingTaskExecution[]> {
     const context = await this.load(userId);
     return context.state.pendingExecutions
@@ -361,6 +522,11 @@ export class ContextManager {
     approval.status = decision;
     approval.respondedAt = new Date();
     this.syncPendingExecutionStatus(context.state, approval.id, this.mapDecisionToExecutionStatus(decision));
+    this.syncWorkflowJobApprovalStatus(
+      context.state,
+      approval.id,
+      this.mapDecisionToWorkflowJobStatus(decision)
+    );
     context.state.decisions.push({
       decision: `权限请求 ${approval.id.substring(0, 8)} 已${this.describeDecision(decision)}: ${approval.action}`,
       timestamp: new Date(),
@@ -402,6 +568,7 @@ export class ContextManager {
                        context.state.blockers.length > 0 ||
                        context.state.approvalRequests.length > 0 ||
                        context.state.pendingExecutions.length > 0 ||
+                       context.state.workflowJobs.length > 0 ||
                        context.summary;
 
     if (!hasHistory) {
@@ -461,6 +628,25 @@ export class ContextManager {
         parts.push(
           `- [${execution.requestId.substring(0, 8)}] ${execution.agentName}: ${execution.task.substring(0, 100)}`
         );
+      }
+    }
+
+    const activeWorkflowJobs = context.state.workflowJobs.filter(job =>
+      ['planned', 'clarification_needed', 'awaiting_approval', 'approved', 'queued', 'running']
+        .includes(job.status)
+    );
+    if (activeWorkflowJobs.length > 0) {
+      parts.push('## Workflow Jobs');
+      for (const job of activeWorkflowJobs.slice(0, 5)) {
+        const poolSuffix = job.computePool ? `, ${job.computePool}` : '';
+        parts.push(`- [${job.id.substring(0, 8)}] ${job.route} (${job.status}${poolSuffix})`);
+      }
+    }
+
+    if (context.state.workflowArtifacts.length > 0) {
+      parts.push('## Workflow Artifacts');
+      for (const artifact of context.state.workflowArtifacts.slice(-5)) {
+        parts.push(`- [${artifact.id.substring(0, 8)}] ${artifact.kind}: ${artifact.label}`);
       }
     }
 
@@ -591,6 +777,16 @@ export class ContextManager {
             .map(item => this.normalizePendingExecution(item))
             .filter((item): item is PendingTaskExecution => Boolean(item))
         : [],
+      workflowJobs: Array.isArray(state.workflowJobs)
+        ? state.workflowJobs
+            .map(item => this.normalizeWorkflowJob(item))
+            .filter((item): item is WorkflowJob => Boolean(item))
+        : [],
+      workflowArtifacts: Array.isArray(state.workflowArtifacts)
+        ? state.workflowArtifacts
+            .map(item => this.normalizeWorkflowArtifact(item))
+            .filter((item): item is WorkflowArtifact => Boolean(item))
+        : [],
     };
   }
 
@@ -615,6 +811,16 @@ export class ContextManager {
         ...execution,
         createdAt: execution.createdAt.toISOString(),
         updatedAt: execution.updatedAt.toISOString(),
+      })),
+      workflowJobs: state.workflowJobs.map(job => ({
+        ...job,
+        createdAt: job.createdAt.toISOString(),
+        updatedAt: job.updatedAt.toISOString(),
+      })),
+      workflowArtifacts: state.workflowArtifacts.map(artifact => ({
+        ...artifact,
+        createdAt: artifact.createdAt.toISOString(),
+        updatedAt: artifact.updatedAt.toISOString(),
       })),
     };
   }
@@ -759,6 +965,102 @@ export class ContextManager {
     return 'awaiting_approval';
   }
 
+  private normalizeWorkflowJob(rawJob: unknown): WorkflowJob | null {
+    if (!rawJob || typeof rawJob !== 'object') {
+      return null;
+    }
+
+    const job = rawJob as Record<string, unknown>;
+    if (
+      typeof job.id !== 'string' ||
+      typeof job.route !== 'string' ||
+      typeof job.lane !== 'string' ||
+      typeof job.inputText !== 'string' ||
+      typeof job.summary !== 'string' ||
+      typeof job.workingDir !== 'string'
+    ) {
+      return null;
+    }
+
+    return {
+      id: job.id,
+      route: job.route as WorkflowRouteName,
+      lane: job.lane as WorkflowLane,
+      inputText: job.inputText,
+      summary: job.summary,
+      rationale: typeof job.rationale === 'string' ? job.rationale : undefined,
+      status: this.normalizeWorkflowJobStatus(job.status),
+      workingDir: job.workingDir,
+      source: job.source === 'wechat' ? 'wechat' : 'wechat',
+      approvalRequestId:
+        typeof job.approvalRequestId === 'string' ? job.approvalRequestId : undefined,
+      artifactIds: Array.isArray(job.artifactIds)
+        ? job.artifactIds.filter((item): item is string => typeof item === 'string')
+        : [],
+      computePool: this.normalizeWorkflowComputePool(job.computePool),
+      runId: typeof job.runId === 'string' ? job.runId : undefined,
+      createdAt: parseDate(job.createdAt),
+      updatedAt: parseDate(job.updatedAt),
+    };
+  }
+
+  private normalizeWorkflowArtifact(rawArtifact: unknown): WorkflowArtifact | null {
+    if (!rawArtifact || typeof rawArtifact !== 'object') {
+      return null;
+    }
+
+    const artifact = rawArtifact as Record<string, unknown>;
+    if (
+      typeof artifact.id !== 'string' ||
+      typeof artifact.jobId !== 'string' ||
+      typeof artifact.kind !== 'string' ||
+      typeof artifact.label !== 'string'
+    ) {
+      return null;
+    }
+
+    return {
+      id: artifact.id,
+      jobId: artifact.jobId,
+      kind: artifact.kind,
+      label: artifact.label,
+      summary: typeof artifact.summary === 'string' ? artifact.summary : undefined,
+      path: typeof artifact.path === 'string' ? artifact.path : undefined,
+      createdAt: parseDate(artifact.createdAt),
+      updatedAt: parseDate(artifact.updatedAt),
+    };
+  }
+
+  private normalizeWorkflowJobStatus(value: unknown): WorkflowJobStatus {
+    if (
+      value === 'planned' ||
+      value === 'clarification_needed' ||
+      value === 'awaiting_approval' ||
+      value === 'approved' ||
+      value === 'queued' ||
+      value === 'running' ||
+      value === 'completed' ||
+      value === 'cancelled' ||
+      value === 'failed'
+    ) {
+      return value;
+    }
+
+    return 'planned';
+  }
+
+  private normalizeWorkflowComputePool(value: unknown): WorkflowComputePool | undefined {
+    if (
+      value === 'wechat_realtime' ||
+      value === 'writing_batch' ||
+      value === 'research_sandbox'
+    ) {
+      return value;
+    }
+
+    return undefined;
+  }
+
   private expireOverdueApprovalState(state: ContextState): boolean {
     let changed = false;
     const now = new Date();
@@ -793,6 +1095,20 @@ export class ContextManager {
     execution.updatedAt = new Date();
   }
 
+  private syncWorkflowJobApprovalStatus(
+    state: ContextState,
+    requestId: string,
+    status: WorkflowJobStatus
+  ): void {
+    const job = state.workflowJobs.find(item => item.approvalRequestId === requestId);
+    if (!job) {
+      return;
+    }
+
+    job.status = status;
+    job.updatedAt = new Date();
+  }
+
   private mapDecisionToExecutionStatus(
     decision: Exclude<PermissionDecision, 'pending'>
   ): PendingTaskStatus {
@@ -803,6 +1119,18 @@ export class ContextManager {
         return 'denied';
       case 'expired':
         return 'expired';
+    }
+  }
+
+  private mapDecisionToWorkflowJobStatus(
+    decision: Exclude<PermissionDecision, 'pending'>
+  ): WorkflowJobStatus {
+    switch (decision) {
+      case 'approved':
+        return 'approved';
+      case 'denied':
+      case 'expired':
+        return 'cancelled';
     }
   }
 
@@ -870,6 +1198,29 @@ export class ContextManager {
       for (const execution of pendingExecutions.slice(0, 10)) {
         lines.push(
           `- [${execution.requestId.substring(0, 8)}] ${execution.agentName}: ${execution.task}`
+        );
+      }
+      lines.push('');
+    }
+
+    const workflowJobs = context.state.workflowJobs.filter(job =>
+      ['planned', 'clarification_needed', 'awaiting_approval', 'approved', 'queued', 'running']
+        .includes(job.status)
+    );
+    if (workflowJobs.length > 0) {
+      lines.push(`## Workflow Jobs`);
+      for (const job of workflowJobs.slice(0, 10)) {
+        const poolSuffix = job.computePool ? `, ${job.computePool}` : '';
+        lines.push(`- [${job.id.substring(0, 8)}] ${job.route} (${job.status}${poolSuffix})`);
+      }
+      lines.push('');
+    }
+
+    if (context.state.workflowArtifacts.length > 0) {
+      lines.push(`## Workflow Artifacts`);
+      for (const artifact of context.state.workflowArtifacts.slice(-10)) {
+        lines.push(
+          `- [${artifact.id.substring(0, 8)}] ${artifact.kind}: ${artifact.label}`
         );
       }
       lines.push('');

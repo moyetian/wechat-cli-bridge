@@ -56,6 +56,72 @@ function escapeWindowsShellArg(arg: string): string {
   return /[\s&|<>^()%!]/.test(escaped) ? `"${escaped}"` : escaped;
 }
 
+function isGitWorkTree(cwd: string, env: NodeJS.ProcessEnv): boolean {
+  try {
+    const result = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], {
+      cwd,
+      env,
+      timeout: 5000,
+    });
+    return (
+      result.status === 0 &&
+      result.stdout?.toString().trim() === 'true'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function maybeAddCodexRepoCheckBypass(
+  command: string,
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv
+): string[] {
+  if (
+    command !== 'codex' ||
+    args[0] !== 'exec' ||
+    args.includes('--skip-git-repo-check') ||
+    isGitWorkTree(cwd, env)
+  ) {
+    return args;
+  }
+
+  const augmentedArgs = [...args];
+  augmentedArgs.splice(1, 0, '--skip-git-repo-check');
+  return augmentedArgs;
+}
+
+function maybeAddCodexWritableDirs(
+  command: string,
+  args: string[],
+  writableDirs?: string[]
+): string[] {
+  if (command !== 'codex' || args[0] !== 'exec' || !writableDirs?.length) {
+    return args;
+  }
+
+  const existingWritableDirs = new Set<string>();
+  for (let index = 1; index < args.length - 1; index++) {
+    if (args[index] === '--add-dir') {
+      existingWritableDirs.add(args[index + 1]);
+    }
+  }
+
+  const dirsToAdd = writableDirs.filter(
+    dir => dir && !existingWritableDirs.has(dir)
+  );
+  if (dirsToAdd.length === 0) {
+    return args;
+  }
+
+  return [
+    'exec',
+    ...dirsToAdd.flatMap(dir => ['--add-dir', dir]),
+    ...args.slice(1),
+  ];
+}
+
 /**
  * CLI Adapter - Execute CLI-based agents
  * 
@@ -87,6 +153,7 @@ export class CLIAdapter extends BaseAgent {
         cwd: options.workingDir,
         timeout,
         env: this.getEnv(),
+        writableDirs: options.writableDirs,
         permissionMode: options.permissionMode,
         bridgeApproved: options.bridgeApproved,
       });
@@ -127,7 +194,45 @@ export class CLIAdapter extends BaseAgent {
         [command],
         { timeout: 5000 }
       );
-      return result.status === 0;
+      if (result.status !== 0) {
+        return false;
+      }
+
+      if (command === 'claude') {
+        return this.isClaudeAuthReady();
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private isClaudeAuthReady(): boolean {
+    const mergedEnv = {
+      ...process.env,
+      ...(this.config.env || {}),
+    };
+
+    if (mergedEnv.ANTHROPIC_API_KEY || mergedEnv.ANTHROPIC_AUTH_TOKEN) {
+      return true;
+    }
+
+    try {
+      const status = spawnSync('claude', ['auth', 'status'], {
+        timeout: 5000,
+        env: mergedEnv,
+      });
+      const stdout = status.stdout
+        ? status.stdout.toString().trim()
+        : '';
+
+      if (!stdout) {
+        return false;
+      }
+
+      const parsed = JSON.parse(stdout) as { loggedIn?: boolean };
+      return parsed.loggedIn === true;
     } catch {
       return false;
     }
@@ -158,6 +263,7 @@ export class CLIAdapter extends BaseAgent {
       cwd: string;
       timeout: number;
       env: NodeJS.ProcessEnv;
+      writableDirs?: string[];
       permissionMode?: ExecuteOptions['permissionMode'];
       bridgeApproved?: boolean;
     }
@@ -189,6 +295,17 @@ export class CLIAdapter extends BaseAgent {
         options.permissionMode,
         options.bridgeApproved
       );
+      const commandArgs = maybeAddCodexRepoCheckBypass(
+        command,
+        invocationPlan.args,
+        options.cwd,
+        options.env
+      );
+      const finalArgs = maybeAddCodexWritableDirs(
+        command,
+        commandArgs,
+        options.writableDirs
+      );
       
       // Sanitize input and check for dangerous patterns
       const { warnings } = sanitizeInput(input);
@@ -202,7 +319,7 @@ export class CLIAdapter extends BaseAgent {
         if (useShell) {
           const commandStr = [
             command,
-            ...invocationPlan.args.map(escapeWindowsShellArg),
+            ...finalArgs.map(escapeWindowsShellArg),
           ].join(' ');
           this.activeProcess = spawn(commandStr, [], {
             cwd: options.cwd,
@@ -212,7 +329,7 @@ export class CLIAdapter extends BaseAgent {
             windowsHide: true,
           });
         } else {
-          this.activeProcess = spawn(command, invocationPlan.args, {
+          this.activeProcess = spawn(command, finalArgs, {
             cwd: options.cwd,
             env: options.env,
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -228,7 +345,7 @@ export class CLIAdapter extends BaseAgent {
         if (useShell) {
           const commandStr = [
             command,
-            ...invocationPlan.args.map(escapeWindowsShellArg),
+            ...finalArgs.map(escapeWindowsShellArg),
           ].join(' ');
           this.activeProcess = spawn(commandStr, [], {
             cwd: options.cwd,
@@ -238,7 +355,7 @@ export class CLIAdapter extends BaseAgent {
             windowsHide: true,
           });
         } else {
-          this.activeProcess = spawn(command, invocationPlan.args, {
+          this.activeProcess = spawn(command, finalArgs, {
             cwd: options.cwd,
             env: options.env,
             stdio: ['pipe', 'pipe', 'pipe'],

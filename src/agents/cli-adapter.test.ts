@@ -3,7 +3,7 @@ import { CLIAdapter } from './cli-adapter';
 import { AgentConfig } from '../types';
 
 const spawnMock = jest.fn();
-const spawnSyncMock = jest.fn(() => ({ status: 0 }));
+const spawnSyncMock = jest.fn();
 
 jest.mock('child_process', () => ({
   spawn: (...args: unknown[]) => spawnMock.apply(null, args),
@@ -56,19 +56,24 @@ function expectSpawnInvocation(command: string, args: string[], cwd: string): vo
 describe('CLIAdapter permission enforcement', () => {
   beforeEach(() => {
     spawnMock.mockReset();
-    spawnSyncMock.mockClear();
+    spawnSyncMock.mockReset();
+    spawnSyncMock.mockImplementation((command: string, args?: string[]) => {
+      if (command === 'git' && args?.[0] === 'rev-parse') {
+        return { status: 0, stdout: Buffer.from('true\n') };
+      }
+
+      return { status: 0, stdout: Buffer.from('') };
+    });
   });
 
-  it('should use mode-specific args for non-interactive prompt-flag CLIs', async () => {
+  it('should use positional args for codex exec', async () => {
     const config: AgentConfig = {
       type: 'cli',
       command: 'codex',
+      args: ['exec'],
       permissionProfile: {
-        invocationMode: 'prompt_flag',
-        promptArgs: ['-p'],
+        invocationMode: 'positional',
         permissionArgs: {
-          interactive: ['--suggest'],
-          acceptEdits: ['--auto-edit'],
           auto: ['--full-auto'],
         },
       },
@@ -81,18 +86,17 @@ describe('CLIAdapter permission enforcement', () => {
       permissionMode: 'acceptEdits',
     });
 
-    expectSpawnInvocation('codex', ['--auto-edit', '-p', 'fix auth flow'], '/tmp/project');
+    expectSpawnInvocation('codex', ['exec', 'fix auth flow'], '/tmp/project');
   });
 
   it('should escalate approved tasks to auto mode args', async () => {
     const config: AgentConfig = {
       type: 'cli',
       command: 'codex',
+      args: ['exec'],
       permissionProfile: {
-        invocationMode: 'prompt_flag',
-        promptArgs: ['-p'],
+        invocationMode: 'positional',
         permissionArgs: {
-          interactive: ['--suggest'],
           auto: ['--full-auto'],
         },
       },
@@ -106,7 +110,66 @@ describe('CLIAdapter permission enforcement', () => {
       bridgeApproved: true,
     });
 
-    expectSpawnInvocation('codex', ['--full-auto', '-p', 'fix auth flow'], '/tmp/project');
+    expectSpawnInvocation('codex', ['exec', '--full-auto', 'fix auth flow'], '/tmp/project');
+  });
+
+  it('should bypass codex repo check outside git working trees', async () => {
+    spawnSyncMock.mockImplementation((command: string, args?: string[]) => {
+      if (command === 'git' && args?.[0] === 'rev-parse') {
+        return { status: 128, stdout: Buffer.from('') };
+      }
+
+      return { status: 0, stdout: Buffer.from('') };
+    });
+    const config: AgentConfig = {
+      type: 'cli',
+      command: 'codex',
+      args: ['exec'],
+      permissionProfile: {
+        invocationMode: 'positional',
+        permissionArgs: {
+          auto: ['--full-auto'],
+        },
+      },
+    };
+    spawnMock.mockReturnValueOnce(createMockChild());
+
+    const adapter = new CLIAdapter('codex', config);
+    await adapter.execute('fix auth flow', {
+      workingDir: '/tmp/non-repo',
+      permissionMode: 'acceptEdits',
+    });
+
+    expectSpawnInvocation(
+      'codex',
+      ['exec', '--skip-git-repo-check', 'fix auth flow'],
+      '/tmp/non-repo'
+    );
+  });
+
+  it('should pass additional writable directories to codex', async () => {
+    const config: AgentConfig = {
+      type: 'cli',
+      command: 'codex',
+      args: ['exec'],
+      permissionProfile: {
+        invocationMode: 'positional',
+      },
+    };
+    spawnMock.mockReturnValueOnce(createMockChild());
+
+    const adapter = new CLIAdapter('codex', config);
+    await adapter.execute('fix auth flow', {
+      workingDir: '/tmp/project',
+      writableDirs: ['/tmp/artifacts/job-1'],
+      permissionMode: 'acceptEdits',
+    });
+
+    expectSpawnInvocation(
+      'codex',
+      ['exec', '--add-dir', '/tmp/artifacts/job-1', 'fix auth flow'],
+      '/tmp/project'
+    );
   });
 
   it('should use stdin prompt flow for multiline positional CLIs', async () => {
@@ -133,5 +196,37 @@ describe('CLIAdapter permission enforcement', () => {
     expectSpawnInvocation('iflow', ['-y', '-p'], '/tmp/project');
     expect(child.stdin.write).toHaveBeenCalledWith('line1\nline2');
     expect(child.stdin.end).toHaveBeenCalled();
+  });
+
+  it('should treat claude as unavailable when auth status reports logged out', async () => {
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from('/usr/bin/claude\n') })
+      .mockReturnValueOnce({
+        status: 1,
+        stdout: Buffer.from(JSON.stringify({ loggedIn: false })),
+      });
+
+    const adapter = new CLIAdapter('claude', {
+      type: 'cli',
+      command: 'claude',
+    });
+
+    await expect(adapter.isAvailable()).resolves.toBe(false);
+  });
+
+  it('should treat claude as available when auth status reports logged in', async () => {
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from('/usr/bin/claude\n') })
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: Buffer.from(JSON.stringify({ loggedIn: true })),
+      });
+
+    const adapter = new CLIAdapter('claude', {
+      type: 'cli',
+      command: 'claude',
+    });
+
+    await expect(adapter.isAvailable()).resolves.toBe(true);
   });
 });

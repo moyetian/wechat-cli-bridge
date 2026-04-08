@@ -10,6 +10,8 @@ dist/
 .accounts/
 logs/
 *.log
+.runtime-home/
+.codex/
 
 # Environment
 .env
@@ -28,3 +30,7 @@ Thumbs.db
 
 # Config with secrets
 config.local.json
+
+# Local planning / operator logs
+GSD/.planning/
+GSD/sessions/
